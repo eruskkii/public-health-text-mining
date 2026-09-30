@@ -114,3 +114,28 @@ resp_status(cc_response)
 Access issue
 The initial Common Crawl index request returned HTTP status 504 ("Gateway Timeout"). Although Common Crawl provides recent web archives and extracted plaintext, accessing and filtering the archive would require a more complex acquisition pipeline than initially anticipated.
 Given the project timeframe, Common Crawl was not selected as the primary acquisition route.
+
+
+## Experiment 4: Mpox Instagram corpus
+
+Following the access constraints encountered with GDELT and Common Crawl,
+we tested an existing public corpus of Instagram posts about mpox.
+
+The dataset contains 60,127 posts published between July 2022 and
+September 2024. It therefore independently exceeds the assignment's
+minimum corpus size of 50,000 documents.
+
+We first use the Figshare API to inspect the files attached to the
+dataset before downloading the corpus.
+
+```{r}
+figshare_url <- "https://api.figshare.com/v2/articles/27072247/files"
+
+figshare_request <- request(figshare_url) |>
+  req_timeout(60)
+
+figshare_response <- req_perform(figshare_request)
+
+resp_status(figshare_response)
+```
+
