@@ -5,23 +5,112 @@ format: html
 editor: visual
 ---
 
-## Quarto
+# Purpose
 
-Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
+This notebook evaluates candidate public data sources for the Group 4 term paper on mining public health discourse.
 
-## Running Code
+The assignment requires a corpus of at least 50,000 documents.
 
-When you click the **Render** button a document will be generated that includes both content and the output of embedded code. You can embed code like this:
+We evaluate three acquisition routes:
+
+1.  Public archived datasets
+2.  GDELT news data
+3.  Social media datasets
+
+For each source, we record:
+
+- accessibility
+- corpus size
+- available text
+- date coverage
+- metadata
+- reproducibility
+- limitations
+
+## Setup
+```{r}
+library(tidyverse)
+library(httr2)
+library(jsonlite)
+library(here)
+library(janitor)
+
+```
+## Experiment 1: GDELT
+
+We first test whether the GDELT DOC 2.0 API is accessible and inspect
+the structure of a small response before attempting large-scale collection.
+
+### Small test request
 
 ```{r}
-1 + 1
-```
+gdelt_url <- "https://api.gdeltproject.org/api/v2/doc/doc"
 
-You can add options to executable code like this
+request <- request(gdelt_url) |>
+  req_timeout(60)
+  req_url_query(
+    query = "vaccine",
+    mode = "ArtList",
+    format = "json",
+    maxrecords = 10
+  )
+
+request
+
+response <- req_perform(request)
+```
+### Access issue
+
+The initial GDELT API test did not successfully return data.
+
+The first request timed out after 10 seconds. A subsequent request where we increased timeout reached
+the server but returned HTTP status 429 ("Too Many Requests"), indicating
+rate limiting at the API endpoint.
+
+This presents a potential access constraint for large-scale collection. Since the proposed corpus requires at least 50,000 documents, repeated timeouts or rate limiting could make GDELT impractical within the project's timeframe. The source was therefore retained as a candidate but not relied upon as the sole acquisition route.
+
+
+
+## Experiment 2: Archived COVID-19 vaccine corpus
+
+Following the access constraints encountered with the GDELT API, we
+investigated publicly archived social-media corpora.
+
+We first investigated the Large-scale COVID-19 Twitter Chatter Dataset hosted on Zenodo. Although the corpus is substantially larger than the 50,000-document requirement, the archived dataset primarily distributes tweet identifiers which would need hydrating through Twitter's API. 
+
+The University of Maryland BSOS Social Science Data Repository hosts a
+public mirror of the *All COVID-19 Vaccines Tweets* dataset originally
+collected by Gabriel Preda.
+
+The repository reports 228,207 observations and 25 variables, exceeding
+the assignment requirement of at least 50,000 documents.
+
+Result
+The latest data is from 2021. So we're making the decision to move to a topic with more recent public discourse across a longer time frame.
+
+## Experiment 3: Common Crawl
+
+Common Crawl provides public web archives containing raw pages, metadata,
+and extracted plaintext. Unlike GDELT, its standard index is URL-based
+rather than a keyword search API.
+
+We first test whether R can query a recent crawl and retrieve records
+from the archive.
 
 ```{r}
-#| echo: false
-2 * 2
-```
+cc_url <- "https://index.commoncrawl.org/CC-MAIN-2025-43-index"
 
-The `echo: false` option disables the printing of code (only output is displayed).
+cc_request <- request(cc_url) |>
+  req_url_query(
+    url = "commoncrawl.org/get-started",
+    output = "json"
+  ) |>
+  req_timeout(60)
+
+cc_response <- req_perform(cc_request)
+
+resp_status(cc_response)
+```
+Access issue
+The initial Common Crawl index request returned HTTP status 504 ("Gateway Timeout"). Although Common Crawl provides recent web archives and extracted plaintext, accessing and filtering the archive would require a more complex acquisition pipeline than initially anticipated.
+Given the project timeframe, Common Crawl was not selected as the primary acquisition route.
