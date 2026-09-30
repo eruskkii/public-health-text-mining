@@ -138,4 +138,152 @@ figshare_response <- req_perform(figshare_request)
 
 resp_status(figshare_response)
 ```
+Result 
+404 error. Dataset is no longer available for download as I initially thought. 
+
+
+## Experiment 5: Reddit archive access with Arctic Shift
+
+Arctic Shift provides historical access to archived Reddit posts and
+comments. Before selecting a health topic, we test whether the archive
+can provide reproducible access to Reddit data and estimate document
+volumes over time.
+
+The first test uses a single subreddit and a one-month period to avoid
+requesting a large volume of data before access is confirmed.
+
+```{r}
+arctic_url <- paste0(
+  "https://arctic-shift.photon-reddit.com",
+  "/api/posts/search/aggregate"
+)
+
+arctic_request <- request(arctic_url) |>
+  req_url_query(
+    subreddit = "vaccines",
+    after = "2021-01-01",
+    before = "2021-02-01",
+    aggregate = "created_utc",
+    frequency = "month"
+  ) |>
+req_timeout(60)
+
+arctic_response <- req_perform(arctic_request)
+
+resp_status(arctic_response)
+```
+We got a 200 HTTP response, so let's test what Arctic shift is giving us. 
+
+```{r}
+arctic_counts <- resp_body_json(
+  arctic_response,
+  simplifyVector = TRUE
+)
+
+arctic_counts
+```
+Testing the API for five year period
+```{r}
+arctic_request_long <- request(arctic_url) |>
+  req_url_query(
+    subreddit = "vaccines",
+    after = "2020-01-01",
+    before = "2026-01-01",
+    aggregate = "created_utc",
+    frequency = "month"
+  ) |>
+  req_timeout(60)
+
+arctic_response_long <- req_perform(arctic_request_long)
+
+resp_status(arctic_response_long)
+
+
+```
+We got successful HTTP request. So, let's see the actual data
+
+```{r}
+vaccines_monthly <- resp_body_json(
+  arctic_response_long,
+  simplifyVector = TRUE
+)
+
+vaccines_monthly
+```
+Let's check comments
+
+```{r}
+arctic_comments_url <- paste0(
+  "https://arctic-shift.photon-reddit.com",
+  "/api/comments/search/aggregate"
+)
+
+comments_request <- request(arctic_comments_url) |>
+  req_url_query(
+    subreddit = "vaccines",
+    after = "2021-01-01",
+    before = "2022-01-01",
+    aggregate = "created_utc",
+    frequency = "month"
+  ) |>
+  req_timeout(60)
+
+comments_response <- comments_request |>
+  req_error(is_error = function(resp) FALSE) |>
+  req_perform()
+
+resp_status(comments_response)
+resp_body_string(comments_response)
+```
+### Result
+
+A six-year aggregation request for comments returned a server-side timeout.
+Repeating the request for 2021 only succeeded (HTTP 200), returning monthly
+comment counts for the full year. This suggests that Arctic Shift is viable
+for historical Reddit acquisition, but requests should be divided into
+smaller time windows.
+
+We're going to write a function to test this. 
+
+
+
+```{r}
+get_comment_counts <- function(year) {
+
+  start_date <- paste0(year, "-01-01")
+  end_date <- paste0(year + 1, "-01-01")
+
+  request <- request(arctic_comments_url) |>
+    req_url_query(
+      subreddit = "vaccines",
+      after = start_date,
+      before = end_date,
+      aggregate = "created_utc",
+      frequency = "month"
+    ) |>
+    req_timeout(60)
+
+  response <- request |>
+    req_error(is_error = function(resp) FALSE) |>
+    req_perform()
+
+  if (resp_status(response) != 200) {
+    stop(paste("Request failed for year", year))
+  }
+
+  data <- resp_body_json(
+    response,
+    simplifyVector = TRUE
+  )
+
+  data
+}
+```
+
+Test function
+
+```{r}
+comments_2021 <- get_comment_counts(2021)
+```
+
 
