@@ -770,7 +770,63 @@ save_raw_data(
   filename = "vaccines_2021"
 )
 ```
+Downloaidng 2022
 
+```{r}
+vaccines_2022 <- download_reddit_year(
+  subreddit = "vaccines",
+  year = 2022
+)
+```
+```{r}
+vaccines_comments |>
+  dplyr::filter(
+    created_utc >= "2021-12-31",
+    created_utc < "2022-12-31"
+  ) |>
+  dplyr::summarise(
+    expected = sum(count)
+  )
+```
+
+```{r}
+save_raw_data(
+  data = vaccines_2022,
+  filename = "vaccines_2022"
+)
+```
+Now 2023
+
+```{r}
+vaccines_2023 <- download_reddit_year(
+  subreddit = "vaccines",
+  year = 2023
+)
+```
+```{r}
+vaccines_comments |>
+  dplyr::filter(
+    created_utc >= "2022-12-31",
+    created_utc < "2023-12-31"
+  ) |>
+  dplyr::summarise(
+    expected = sum(count)
+  )
+```
+```{r}
+save_raw_data(
+  data = vaccines_2023,
+  filename = "vaccines_2023"
+)
+```
+Now 2024
+
+```{r}
+vaccines_2024 <- download_reddit_year(
+  subreddit = "vaccines",
+  year = 2024
+)
+```
 
 
 
