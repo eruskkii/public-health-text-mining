@@ -3,6 +3,8 @@ title: "Data access and corpus acquisition"
 author: "Group 4 - Computer Science"
 format: html
 editor: visual
+execute:
+  eval: false 
 ---
 
 # Purpose
@@ -248,14 +250,14 @@ We're going to write a function to test this.
 
 
 ```{r}
-get_comment_counts <- function(year) {
+get_comment_counts <- function(subreddit, year) {
 
   start_date <- paste0(year, "-01-01")
   end_date <- paste0(year + 1, "-01-01")
 
   request <- request(arctic_comments_url) |>
     req_url_query(
-      subreddit = "vaccines",
+      subreddit = subreddit,
       after = start_date,
       before = end_date,
       aggregate = "created_utc",
@@ -268,22 +270,155 @@ get_comment_counts <- function(year) {
     req_perform()
 
   if (resp_status(response) != 200) {
-    stop(paste("Request failed for year", year))
+  print(resp_status(response))
+  print(resp_body_string(response))
+  stop(paste("Request failed for year", year))
   }
 
-  data <- resp_body_json(
+  body <- resp_body_json(
     response,
     simplifyVector = TRUE
   )
-
-  data
+  Sys.sleep(2)
+  body$data
 }
 ```
 
 Test function
 
 ```{r}
-comments_2021 <- get_comment_counts(2021)
+comments_2021 <- get_comment_counts("vaccines", 2021)
 ```
+Display result
+
+```{r}
+comments_2021
+```
+```{r}
+vaccines_comments <- purrr::map_dfr(
+  2020:2025,
+  ~ get_comment_counts("vaccines", .x)
+)
+
+vaccines_comments
+```
+```{r}
+get_comment_counts("vaccines", 2020)
+```
+
+```{r}
+get_comment_counts("vaccines", 2021)
+```
+```{r}
+get_comment_counts_with_retry <- function(subreddit, year, max_attempts = 3) {
+
+    for (attempt in 1:max_attempts) {
+
+        result <- tryCatch(
+            get_comment_counts(subreddit, year),
+            error = function(e) NULL
+        )
+
+        # retry logic...
+        result <- tryCatch(
+      get_comment_counts(subreddit, year),
+      error = function(e) NULL
+    )
+
+    if (!is.null(result)) {
+      cat("Success:", year, "\n")
+      Sys.sleep(10)
+      return(result)
+    }
+
+    cat("Failed:", year, "\n")
+
+    if (attempt < max_attempts) {
+      cat("Waiting 20 seconds before retrying...\n")
+      Sys.sleep(20)
+    }
+  }
+
+  stop(paste("All attempts failed for year", year))
+}
+
+```
+
+```{r}
+vaccines_comments <- purrr::map_dfr(
+  2020:2025,
+  ~ get_comment_counts_with_retry("vaccines", .x)
+)
+
+vaccines_comments
+```
+We've been able to write a function that loops through reddit across several years. We have the count for 2020 to 2025, and we'd save in a parquet
+
+```{r}
+arrow::write_parquet(
+  vaccines_comments,
+  here::here(
+    "data",
+    "raw",
+    "reddit_vaccines_comment_counts_2020_2025.parquet"
+  )
+)
+```
+
+Now we convert to integer so we can count them
+
+```{r}
+vaccines_comments <- vaccines_comments |>
+  dplyr::mutate(
+    count = as.integer(count)
+  )
+
+```
+tnen sum
+
+```{r}
+sum(vaccines_comments$count)
+```
+Let's try to get comments
+
+```{r}
+comments_url <- paste0(
+  "https://arctic-shift.photon-reddit.com",
+  "/api/comments/search"
+)
+
+sample_request <- request(comments_url) |>
+  req_url_query(
+    subreddit = "vaccines",
+    after = "2021-01-01",
+    before = "2021-02-01",
+    limit = 10
+  ) |>
+  req_timeout(60)
+
+sample_response <- sample_request |>
+  req_error(is_error = function(resp) FALSE) |>
+  req_perform()
+
+resp_status(sample_response)
+```
+Then test
+
+
+```{r}
+sample_body <- resp_body_json(
+  sample_response,
+  simplifyVector = TRUE
+)
+
+sample_body$data
+```
+```{r}
+names(sample_body$data)
+
+```
+
+
+
 
 
