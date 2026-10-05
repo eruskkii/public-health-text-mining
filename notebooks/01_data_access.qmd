@@ -49,7 +49,7 @@ the structure of a small response before attempting large-scale collection.
 gdelt_url <- "https://api.gdeltproject.org/api/v2/doc/doc"
 
 request <- request(gdelt_url) |>
-  req_timeout(60)
+  req_timeout(60) |> 
   req_url_query(
     query = "vaccine",
     mode = "ArtList",
@@ -417,6 +417,140 @@ sample_body$data
 names(sample_body$data)
 
 ```
+
+TIme to create a function to get this data for real. 
+
+
+
+```{r}
+comments_url <- paste0(
+  "https://arctic-shift.photon-reddit.com",
+  "/api/comments/search"
+)
+
+get_comment_batch <- function(
+    subreddit,
+    after_date,
+    before_date,
+    limit = 100
+) {
+
+  request <- request(comments_url) |>
+    req_url_query(
+      subreddit = subreddit,
+      after = after_date,
+      before = before_date,
+      sort = "asc",
+      limit = limit,
+      fields = paste(
+        "id",
+        "body",
+        "created_utc",
+        "subreddit",
+        "score",
+        "link_id",
+        "parent_id",
+        sep = ","
+      )
+    ) |>
+    req_timeout(60)
+
+  response <- request |>
+    req_error(is_error = function(resp) FALSE) |>
+    req_perform()
+
+  if (resp_status(response) != 200) {
+    print(resp_status(response))
+    print(resp_body_string(response))
+    stop("Comment batch request failed")
+  }
+
+  body <- resp_body_json(
+    response,
+    simplifyVector = TRUE
+  )
+
+  body$data
+}
+```
+
+Let's test the function batch by batch
+
+```{r}
+batch_1 <- get_comment_batch(
+  subreddit = "vaccines",
+  after_date = "2021-01-01",
+  before_date = "2021-02-01",
+  limit = 100
+)
+
+nrow(batch_1)
+```
+Check
+
+```{r}
+head(batch_1)
+tail(batch_1)
+
+```
+Checking the last timestamp for the first 100. 
+
+```{r}
+last_timestamp <- tail(batch_1$created_utc, 1)
+
+last_timestamp
+```
+Second batch
+```{r}
+batch_2 <- get_comment_batch(
+  subreddit = "vaccines",
+  after_date = last_timestamp,
+  before_date = "2021-02-01",
+  limit = 100
+)
+
+nrow(batch_2)
+```
+
+Check for intersection
+```{r}
+intersect(batch_1$id, batch_2$id)
+```
+```{r}
+tail(batch_1[, c("id", "created_utc")])
+head(batch_2[, c("id", "created_utc")])
+```
+
+Bind the rows. 
+
+```{r}
+first_200 <- dplyr::bind_rows(
+  batch_1,
+  batch_2
+)
+
+nrow(first_200)
+```
+
+Save the data
+```{r}
+dir.create(
+  here::here("data", "raw", "reddit"),
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+arrow::write_parquet(
+  first_200,
+  here::here(
+    "data",
+    "raw",
+    "reddit",
+    "vaccines_2021_001.parquet"
+  )
+)
+```
+
 
 
 
