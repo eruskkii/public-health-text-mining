@@ -828,6 +828,58 @@ vaccines_2024 <- download_reddit_year(
 )
 ```
 
+```{r}
+vaccines_comments |>
+  dplyr::filter(
+    created_utc >= "2023-12-31",
+    created_utc < "2024-12-31"
+  ) |>
+  dplyr::summarise(
+    expected = sum(count)
+  )
+```
 
+```{r}
+save_raw_data(
+  data = vaccines_2024,
+  filename = "vaccines_2024"
+)
+```
+Now 2025
+```{r}
+vaccines_2025 <- download_reddit_year(
+  subreddit = "vaccines",
+  year = 2025
+)
+```
+```{r}
+vaccines_comments |>
+  dplyr::filter(
+    created_utc >= "2024-12-31",
+    created_utc < "2025-12-31"
+  ) |>
+  dplyr::summarise(
+    expected = sum(count)
+  )
+```
+```{r}
+save_raw_data(
+  data = vaccines_2025,
+  filename = "vaccines_2025"
+)
+```
+```{r}
+vaccines_2020 <- arrow::read_parquet(
+  here::here(
+    "data",
+    "raw",
+    "reddit",
+    "vaccines_2020.parquet"
+  )
+)
+```
 
+```{r}
+View(vaccines_2020)
+```
 
