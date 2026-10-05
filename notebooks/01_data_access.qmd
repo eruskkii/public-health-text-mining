@@ -551,6 +551,225 @@ arrow::write_parquet(
 )
 ```
 
+We've tested the batches. Let's try the downloader function. We will implemeent retries, timeout, and wait time between each requests. 
+
+First, we update our getcomment function with retries and Cat will be used to display messages on the terminal. 
+
+```{r}
+get_comment_batch_with_retry <- function(
+    subreddit,
+    after_date,
+    before_date,
+    limit = 100,
+    max_attempts = 3
+) {
+
+  for (attempt in 1:max_attempts) {
+
+    cat(
+      "Request attempt",
+      attempt, "of", max_attempts,
+      "\n"
+    )
+
+    result <- tryCatch(
+      get_comment_batch(
+        subreddit = subreddit,
+        after_date = after_date,
+        before_date = before_date,
+        limit = limit
+      ),
+      error = function(e) {
+        cat("Error:", conditionMessage(e), "\n")
+        NULL
+      }
+    )
+
+    if (!is.null(result)) {
+      Sys.sleep(2)
+      return(result)
+    }
+
+    if (attempt < max_attempts) {
+      cat("Waiting 20 seconds before retrying...\n")
+      Sys.sleep(20)
+    }
+  }
+
+  stop("All attempts failed.")
+}
+```
+
+Now we do the download function proper
+
+```{r}
+download_reddit_year <- function(
+    subreddit,
+    year
+) {
+
+  start_date <- paste0(year, "-01-01")
+  end_date <- paste0(year + 1, "-01-01")
+
+  cursor <- start_date
+  batch_number <- 1
+  all_comments <- list()
+
+  repeat {
+
+    cat(
+      "\nFetching", subreddit,
+      year,
+      "- batch", batch_number,
+      "\n"
+    )
+
+    batch <- get_comment_batch_with_retry(
+      subreddit = subreddit,
+      after_date = cursor,
+      before_date = end_date
+    )
+
+    # Nothing left
+    if (nrow(batch) == 0) {
+      cat("No more comments.\n")
+      break
+    }
+
+    all_comments[[batch_number]] <- batch
+
+    cat(
+      "Retrieved", nrow(batch),
+      "comments. Total:",
+      sum(vapply(all_comments, nrow, integer(1))),
+      "\n"
+    )
+
+    # If fewer than 100 came back,
+    # we've reached the end
+    if (nrow(batch) < 100) {
+      cat("Reached end of", year, "\n")
+      break
+    }
+
+    # Move cursor to timestamp of final comment
+    new_cursor <- tail(batch$created_utc, 1)
+
+    # Safety check: cursor must move
+    if (identical(new_cursor, cursor)) {
+      stop("Cursor did not advance.")
+    }
+
+    cursor <- new_cursor
+    batch_number <- batch_number + 1
+  }
+
+  result <- dplyr::bind_rows(all_comments)
+
+  # Final protection against duplicates
+  result <- result |>
+    dplyr::distinct(id, .keep_all = TRUE)
+
+  result
+}
+```
+
+Now let's tes
+
+```{r}
+
+vaccines_2020 <- download_reddit_year(
+  subreddit = "vaccines",
+  year = 2020
+)
+```
+Our downloader for 2020 worked. So I'm using my engineering instincts to create a separate function for saving data. We can pass anything through the function be it the reddit data or later data from news archives. 
+```{r}
+save_raw_data <- function(
+    data,
+    filename,
+    source = "reddit"
+) {
+
+  folder <- here::here(
+    "data",
+    "raw",
+    source
+  )
+
+  # Create folder if it doesn't already exist
+  dir.create(
+    folder,
+    recursive = TRUE,
+    showWarnings = FALSE
+  )
+
+  filepath <- file.path(
+    folder,
+    paste0(filename, ".parquet")
+  )
+
+  arrow::write_parquet(
+    data,
+    filepath
+  )
+
+  cat(
+    "Saved",
+    nrow(data),
+    "rows to:",
+    filepath,
+    "\n"
+  )
+
+  invisible(filepath)
+}
+```
+
+Let's pass the function inside
+
+```{r}
+save_raw_data(
+  data = vaccines_2020,
+  filename = "vaccines_2020"
+)
+```
+```{r}
+vaccines_comments |>
+  dplyr::filter(
+    created_utc >= "2019-12-31",
+    created_utc < "2020-12-31"
+  ) |>
+  dplyr::summarise(
+    expected = sum(count)
+  )
+```
+
+```{r}
+vaccines_2021 <- download_reddit_year(
+  subreddit = "vaccines",
+  year = 2021
+)
+```
+Now to confirm if it matches our earlier count. 
+
+```{r}
+vaccines_comments |>
+  dplyr::filter(
+    created_utc >= "2020-12-31",
+    created_utc < "2021-12-31"
+  ) |>
+  dplyr::summarise(
+    expected = sum(count)
+  )
+```
+
+```{r}
+save_raw_data(
+  data = vaccines_2021,
+  filename = "vaccines_2021"
+)
+```
 
 
 
