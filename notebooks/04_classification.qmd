@@ -1,14 +1,10 @@
 ---
-title: "classification"
+title: "Classification"
 format: html
 editor: visual
 ---
 
 ## Classification
-
-```{r}
-install.packages("glmnet")
-```
 
 ### Loading the classification dataset
 
@@ -19,6 +15,7 @@ library(here)
 library(dplyr)
 library(glmnet)
 library(Matrix)
+library(slam)
 
 lda_dtm <- readRDS(
   here::here("data", "processed", "lda_dtm.rds")
@@ -39,6 +36,7 @@ head(dominant_topics)
 library(dplyr)
 library(glmnet)
 library(Matrix)
+library(slam)
 
 set.seed(42)
 
@@ -48,7 +46,7 @@ set.seed(42)
 dtm_ids <- rownames(lda_dtm)
 
 if (is.null(dtm_ids) && inherits(lda_dtm, "DocumentTermMatrix")) {
-  dtm_ids <- slam::row_ids(lda_dtm)
+  dtm_ids <- tm::Docs(lda_dtm)
 }
 
 dtm_ids <- unname(as.character(dtm_ids))
@@ -141,23 +139,19 @@ classifier_labels |>
 
 ### Training and testing data
 
-The classification dataset was divided into training (80%) and testing (20%) subsets using stratified random sampling. Stratification preserves the relative distribution of the five topic classes and reduces the risk of underrepresenting smaller classes. The testing subset was reserved for final evaluation, while model fitting and hyperparameter selection would use only the training data.
+The source-stratified 80/20 training and testing split was created before vocabulary construction and LDA estimation. The LDA model was fitted only to training documents, and test topic labels were inferred using that frozen model. The classifier therefore reuses the predetermined split rather than creating a second split after topic estimation.
 
 ```{r}
-set.seed(42)
+# Reuse the split created before topic modelling
+stopifnot("split" %in% names(classifier_labels))
 
-# Create a stratified 80/20 split by topic
-train_indices <- classifier_labels |>
-  mutate(row_index = row_number()) |>
-  group_by(topic) |>
-  slice_sample(prop = 0.8) |>
-  ungroup() |>
-  pull(row_index) |>
-  sort()
+train_indices <- which(classifier_labels$split == "Training")
+test_indices <- which(classifier_labels$split == "Testing")
 
-test_indices <- setdiff(
-  seq_len(nrow(classifier_labels)),
-  train_indices
+stopifnot(
+  length(train_indices) > 0,
+  length(test_indices) > 0,
+  length(intersect(train_indices, test_indices)) == 0
 )
 
 # Split sparse features without converting to a dense matrix
@@ -194,16 +188,25 @@ Ten-fold cross-validation was performed using the training set to select the reg
 ```{r}
 set.seed(42)
 
+# Create reproducible topic-stratified cross-validation folds
+fold_id <- integer(length(y_train))
+
+for (topic_level in levels(y_train)) {
+  topic_rows <- which(y_train == topic_level)
+  fold_id[topic_rows] <- sample(rep(1:10, length.out = length(topic_rows)))
+}
+
 lasso_cv <- glmnet::cv.glmnet(
   x = x_train,
   y = y_train,
   family = "multinomial",
   alpha = 1,
   nfolds = 10,
+  foldid = fold_id,
   type.measure = "class",
   standardize = TRUE,
   lambda.min.ratio = 0.01,
-  maxit = 200000
+  control = list(maxit = 200000)
 )
 
 cat("Lambda minimum:", lasso_cv$lambda.min, "\n")
@@ -245,6 +248,7 @@ confusion_matrix
 
 # Overall accuracy
 test_accuracy <- mean(predicted_topics == y_test)
+majority_baseline <- max(prop.table(table(y_test)))
 
 # Calculate class-specific performance
 class_metrics <- tibble(
@@ -273,20 +277,84 @@ macro_recall <- mean(class_metrics$recall)
 macro_f1 <- mean(class_metrics$f1)
 
 cat("Test accuracy:", round(test_accuracy, 4), "\n")
+cat("Majority-class baseline:", round(majority_baseline, 4), "\n")
 cat("Macro precision:", round(macro_precision, 4), "\n")
 cat("Macro recall:", round(macro_recall, 4), "\n")
 cat("Macro F1:", round(macro_f1, 4), "\n")
 
 class_metrics
+
+# Save exact evaluation tables for reporting
+dir.create(
+  here::here("outputs", "tables"),
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+readr::write_csv(
+  as.data.frame(confusion_matrix),
+  here::here("outputs", "tables", "lasso_confusion_matrix.csv")
+)
+
+readr::write_csv(
+  class_metrics,
+  here::here("outputs", "tables", "lasso_class_metrics.csv")
+)
+
+readr::write_csv(
+  tibble(
+    training_documents = nrow(x_train),
+    testing_documents = nrow(x_test),
+    lambda_min = lasso_cv$lambda.min,
+    lambda_1se = lasso_cv$lambda.1se,
+    accuracy = test_accuracy,
+    majority_baseline = majority_baseline,
+    macro_precision = macro_precision,
+    macro_recall = macro_recall,
+    macro_f1 = macro_f1
+  ),
+  here::here("outputs", "tables", "lasso_summary_metrics.csv")
+)
 ```
 
 ### Classification performance
 
-The multinomial lasso classifier achieved a held-out accuracy of 67.27%, exceeding the majority-class baseline of 46.1% by approximately 21.2 percentage points. Macro-averaged precision, recall and F1-score were 0.690, 0.544 and 0.590, respectively.
+The multinomial lasso classifier achieved an accuracy of 63.57% on 2,204 documents that were excluded from vocabulary construction, LDA estimation, classifier fitting and cross-validation. This exceeded the test-set majority-class baseline of 37.21% by 26.36 percentage points. Macro-averaged precision, recall and F1-score were 0.644, 0.575 and 0.596, respectively.
 
-Performance differed considerably across topics. The classifier correctly identified 90.3% of documents assigned to Topic 1 (vaccination), but recall was lower for the remaining classes, particularly Topic 5 (broader public-health discourse), at 35.9%. The confusion matrix indicates that documents from smaller topics were frequently assigned to Topic 1, suggesting difficulty distinguishing overlapping thematic vocabulary.
+Performance differed across topics. Recall was highest for Topic 3 (vaccination and doses), at 82.7%. Recall was 52.2% for Topic 1, 41.8% for Topic 2, 60.3% for Topic 4 and 50.2% for Topic 5. The confusion matrix indicates that documents from several categories were frequently assigned to the majority Topic 3, suggesting difficulty distinguishing overlapping thematic vocabulary.
 
-These findings demonstrate moderate agreement with the LDA-derived topic assignments. They do not establish independently validated thematic accuracy because the reference labels were generated by an unsupervised model fitted to the sampled corpus.
+These findings demonstrate moderate out-of-sample agreement with topic assignments inferred from a training-only LDA model. They do not establish independently validated thematic accuracy because the reference labels remain generated by an unsupervised model rather than human annotation.
+
+### Comparison with the original workflow
+
+The first analysis split the documents only after the vocabulary and LDA topic assignments had been estimated from the complete modelling sample. Those results are retained below for transparency, but they are treated as an exploratory historical benchmark rather than the primary held-out evaluation. The revised workflow performs the split before vocabulary construction and topic estimation, preventing test documents from influencing model development. Topic numbers are model-specific and should not be interpreted as identical substantive categories across the two runs.
+
+```{r}
+model_comparison <- tibble::tribble(
+  ~measure, ~original_post_lda_split, ~revised_pre_lda_split,
+  "Split timing", "After vocabulary and LDA", "Before vocabulary and LDA",
+  "DTM dimensions", "11,088 x 7,685", "11,080 x 6,614",
+  "Training documents", "8,870", "8,876",
+  "Testing documents", "2,218", "2,204",
+  "Accuracy", "67.27%", "63.57%",
+  "Majority-class baseline", "46.10%", "37.21%",
+  "Macro precision", "0.6902", "0.6437",
+  "Macro recall", "0.5440", "0.5745",
+  "Macro F1", "0.5897", "0.5963"
+)
+
+model_comparison
+
+readr::write_csv(
+  model_comparison,
+  here::here(
+    "outputs", "tables",
+    "lasso_model_comparison.csv"
+  )
+)
+```
+
+The accuracy reduction from 67.27% to 63.57% is consistent with the stricter evaluation design. The revised model remains well above its majority-class baseline and has a slightly higher macro-F1, indicating that the lower overall accuracy is not evidence of uniformly worse class-level performance.
 
 ### Influential terms in topic classification
 
@@ -340,7 +408,7 @@ The strongest positive classifier coefficients were examined alongside document 
 ```{r}
 # Count documents containing each term
 term_document_frequency <- Matrix::colSums(
-  classifier_matrix > 0
+  x_train > 0
 )
 
 term_frequency_table <- tibble(
@@ -356,7 +424,7 @@ coefficient_diagnostics <- top_classifier_terms |>
   ) |>
   mutate(
     document_percentage = round(
-      100 * document_frequency / nrow(classifier_matrix),
+      100 * document_frequency / nrow(x_train),
       2
     )
   ) |>
@@ -515,7 +583,7 @@ This study analysed publicly archived vaccination-related discussions from Twitt
 
 **Limitations of sentiment analysis.** Lexicon-based sentiment methods may misinterpret sarcasm, negation, informal expressions and context-dependent language. Negative words associated with disease, death or health risks do not necessarily indicate opposition to vaccination. Documents without recognised sentiment terms were classified as unclassified rather than assumed to be neutral.
 
-**Topic modelling and classification uncertainty.** LDA identifies statistical patterns of word co-occurrence rather than objectively established themes. Topic names were assigned through interpretation of their prominent terms. The multinomial lasso classifier was trained using these LDA-derived labels, meaning its reported accuracy reflects agreement with the topic model rather than performance against independently annotated ground truth. Its lower recall for minority topics further indicates uneven predictive performance.
+**Topic modelling and classification uncertainty.** LDA identifies statistical patterns of word co-occurrence rather than objectively established themes. Topic names were assigned through interpretation of their prominent terms. The data were split before vocabulary selection and LDA estimation, preventing test-document leakage into model development. Nevertheless, the multinomial lasso classifier used LDA-derived labels, so its reported accuracy reflects out-of-sample agreement with the topic model rather than performance against independently annotated ground truth. Uneven class-specific recall further indicates uneven predictive performance.
 
 **Copyright and responsible reuse.** News articles and social-media content may remain subject to copyright, licensing conditions and platform-specific terms of use. Public availability does not necessarily authorise unrestricted redistribution. Any publication or sharing of the underlying corpus should therefore be assessed against applicable permissions and restrictions.
 

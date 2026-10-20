@@ -1,0 +1,10 @@
+measure,original_post_lda_split,revised_pre_lda_split
+Split timing,After vocabulary and LDA,Before vocabulary and LDA
+DTM dimensions,"11,088 x 7,685","11,080 x 6,614"
+Training documents,"8,870","8,876"
+Testing documents,"2,218","2,204"
+Accuracy,67.27%,63.57%
+Majority-class baseline,46.10%,37.21%
+Macro precision,0.6902,0.6437
+Macro recall,0.5440,0.5745
+Macro F1,0.5897,0.5963

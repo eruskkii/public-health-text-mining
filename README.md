@@ -125,14 +125,14 @@ The following values provide reference points for checking successful reproducti
 | Output | Expected result |
 |---|---:|
 | Cleaned combined corpus | 429,803 documents |
-| LDA modelling sample | 11,088 documents |
-| LDA vocabulary | 7,685 terms |
+| LDA modelling sample | 11,080 documents |
+| LDA vocabulary | 6,614 terms |
 | Number of LDA topics | 5 |
-| Classifier training set | 8,870 documents |
-| Classifier testing set | 2,218 documents |
-| Held-out classification accuracy | 67.27% |
-| Macro-F1 | 0.5897 |
-| Majority-class baseline accuracy | 46.1% |
+| Classifier training set | 8,876 documents |
+| Classifier testing set | 2,204 documents |
+| Held-out classification accuracy | 63.57% |
+| Macro-F1 | 0.5963 |
+| Majority-class baseline accuracy | 37.21% |
 
 Random seeds are used in the modelling workflow to improve reproducibility. Minor numerical differences may occur across R versions, platforms or computational environments.
 
@@ -176,7 +176,9 @@ The combined corpus is not representative of all public discourse about vaccinat
 
 Lexicon-based sentiment scores measure recognised positive and negative language, not necessarily support for or opposition to vaccination.
 
-The five topic labels were derived from an unsupervised LDA model. The lasso classifier was evaluated against these generated labels, not independently annotated ground truth. Consequently, its reported accuracy measures agreement with the topic model.
+The five topic labels were derived from an unsupervised LDA model. The corpus was split before vocabulary construction and LDA estimation, and test-topic proportions were inferred using the frozen training model. The lasso classifier was evaluated against these generated labels, not independently annotated ground truth. Consequently, its reported accuracy measures out-of-sample agreement with the topic model.
+
+Language metadata were unavailable for the Twitter and Reddit archives. English-language tokenisation and sentiment resources were applied to those sources without claiming that every social-media document was independently verified as English. This may contribute to unclassified sentiment and noisy topic vocabulary.
 
 ## Ethical considerations
 

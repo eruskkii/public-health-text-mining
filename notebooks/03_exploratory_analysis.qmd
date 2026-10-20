@@ -23,6 +23,12 @@ vaccine_corpus <- arrow::read_parquet(
   here("data", "processed", "vaccine_corpus.parquet")
 )
 
+dir.create(
+  here("outputs", "tables"),
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
 glimpse(vaccine_corpus)
 ```
 
@@ -40,6 +46,18 @@ The sources are displayed in separate panels with independent vertical scales be
 monthly_counts <- vaccine_corpus |>
   mutate(month = lubridate::floor_date(date, "month")) |>
   count(source, month, name = "documents")
+
+corpus_source_year <- vaccine_corpus |>
+  count(
+    source,
+    year = lubridate::year(date),
+    name = "documents"
+  )
+
+readr::write_csv(
+  corpus_source_year,
+  here("outputs", "tables", "corpus_source_year.csv")
+)
 
 # Plot monthly counts separately for each source
 ggplot(monthly_counts, aes(x = month, y = documents)) +
@@ -177,7 +195,11 @@ bing <- tidytext::get_sentiments("bing")
 
 # Count positive and negative sentiment words per document
 sentiment_matches <- tokens |>
-  inner_join(bing, by = "word") |>
+  inner_join(
+    bing,
+    by = "word",
+    relationship = "many-to-many"
+  ) |>
   count(document_id, source, sentiment, name = "n") |>
   tidyr::pivot_wider(
     names_from = sentiment,
@@ -444,9 +466,9 @@ These patterns describe sentiment-bearing vocabulary within the collected datase
 
 Latent Dirichlet Allocation (LDA) was employed to identify recurring themes within the vaccine-related corpus. LDA is an unsupervised probabilistic model that represents documents as mixtures of topics and topics as distributions over words.
 
-To manage computational demands and reduce the dominance of the substantially larger Twitter/X dataset, a reproducible stratified sample was drawn from the three sources. The initial model used up to 5,000 documents per source, selected with a fixed random seed.
+To manage computational demands and reduce the dominance of the substantially larger Twitter/X dataset, a reproducible source-stratified sample was drawn from the three sources. The model used up to 5,000 documents per source, selected with a fixed random seed. This sample was split into training and testing partitions before vocabulary construction or topic estimation.
 
-The sampled documents were tokenised and converted into a sparse document-term matrix. Common stopwords, URL artefacts, and extremely rare or ubiquitous terms were excluded. An initial six-topic model was fitted, with the most probable terms examined to interpret each topic.
+The sampled documents were tokenised and converted into a sparse document-term matrix. Common stopwords and URL artefacts were excluded. Vocabulary selection used the training partition only: terms had to appear in at least 10 training documents and in no more than 95% of training documents. A five-topic model was fitted to the training partition, with the most probable terms examined to interpret each topic.
 
 The resulting topics represent statistical patterns of word co-occurrence and require substantive interpretation. They should not be treated as independently verified categories of public opinion.
 
@@ -468,9 +490,27 @@ lda_sample <- vaccine_corpus |>
   ungroup() |>
   select(document_id, source, date, text)
 
+# Split by source before vocabulary construction and topic modelling
+set.seed(42)
+
+training_ids <- lda_sample |>
+  group_by(source) |>
+  slice_sample(prop = 0.8) |>
+  ungroup() |>
+  pull(document_id)
+
+lda_sample <- lda_sample |>
+  mutate(
+    split = if_else(
+      document_id %in% training_ids,
+      "Training",
+      "Testing"
+    )
+  )
+
 # Inspect the sample
 lda_sample |>
-  count(source)
+  count(source, split)
 ```
 
 ## Building the document term matrix
@@ -478,6 +518,7 @@ lda_sample |>
 ```{r}
 # Tokenise sampled documents
 lda_tokens <- lda_sample |>
+  select(document_id, split, text) |>
   unnest_tokens(word, text) |>
   filter(
     str_detect(word, "^[a-z]{3,}$"),
@@ -487,28 +528,60 @@ lda_tokens <- lda_sample |>
 
 # Count terms within documents
 lda_term_counts <- lda_tokens |>
-  count(document_id, word, name = "n")
+  count(document_id, split, word, name = "n")
 
-# Retain terms appearing in at least 10 documents
+# Learn the vocabulary from training documents only
+training_document_count <- lda_sample |>
+  filter(split == "Training") |>
+  summarise(documents = n()) |>
+  pull(documents)
+
 vocabulary <- lda_term_counts |>
+  filter(split == "Training") |>
   distinct(document_id, word) |>
   count(word, name = "document_frequency") |>
-  filter(document_frequency >= 10)
+  filter(
+    document_frequency >= 10,
+    document_frequency <= 0.95 * training_document_count
+  )
 
 lda_term_counts <- lda_term_counts |>
-  semi_join(vocabulary, by = "word")
+  semi_join(vocabulary, by = "word") |>
+  select(document_id, word, n)
 
-# Create sparse document-term matrix
+# Create one sparse matrix with a training-derived feature space
 lda_dtm <- lda_term_counts |>
   cast_dtm(document_id, word, n)
 
+dtm_ids <- unname(rownames(lda_dtm))
+
+stopifnot(
+  !is.null(dtm_ids),
+  !anyNA(dtm_ids),
+  !anyDuplicated(dtm_ids)
+)
+
+train_dtm <- lda_dtm[
+  dtm_ids %in% training_ids,
+  ,
+  drop = FALSE
+]
+
+test_dtm <- lda_dtm[
+  !dtm_ids %in% training_ids,
+  ,
+  drop = FALSE
+]
+
 # Check dimensions
 dim(lda_dtm)
+dim(train_dtm)
+dim(test_dtm)
 ```
 
 ### Topic Modelling Using Latent Dirichlet Allocation
 
-To identify recurring themes in vaccine discourse, we applied Latent Dirichlet Allocation (LDA) to a stratified sample of documents from Twitter, Reddit and news articles. Following tokenisation, stop-word removal and vocabulary filtering, the resulting document-term matrix contained 11,088 documents and 7,685 terms. We initially specified five topics to obtain an interpretable exploratory model.
+To identify recurring themes in vaccine discourse, we applied Latent Dirichlet Allocation (LDA) to a stratified sample of documents from Twitter, Reddit and news articles. After the pre-modelling split, training-only vocabulary selection and removal of documents with no retained terms, the resulting document-term matrix contained 11,080 documents and 6,614 terms. The LDA model was fitted to 8,876 training documents; topic proportions for 2,204 test documents were inferred using the frozen training model. We specified five topics as an exploratory, interpretability-driven choice.
 
 ```{r}
 # Fit a five-topic Latent Dirichlet Allocation model
@@ -517,7 +590,7 @@ library(topicmodels)
 set.seed(42)
 
 lda_model <- LDA(
-  lda_dtm,
+  train_dtm,
   k = 5,
   method = "Gibbs",
   control = list(
@@ -543,9 +616,9 @@ top_topic_terms <- lda_topics |>
 top_topic_terms
 ```
 
-The five-topic LDA model identified several recurring dimensions of vaccine-related discourse. Topic 1 concentrated on vaccination and dose administration, while Topic 3 reflected political leadership and government policy. Topic 4 emphasised disease risks and public health information, and Topic 5 captured broader pandemic-related concerns. Topic 2 contained more general conversational language, potentially reflecting personal experiences and vaccine access. These labels are provisional interpretations of the highest-probability terms rather than independently validated categories.
+The five-topic LDA model identified several recurring dimensions of vaccine-related discourse. Topic 1 concentrated on health, medicine, children and vaccine safety; Topic 2 reflected political leadership and government; Topic 3 focused on vaccination, doses and immunisation; Topic 4 contained personal and conversational language; and Topic 5 captured wider pandemic and international coverage. These labels are provisional interpretations of the highest-probability terms rather than independently validated categories.
 
-Figure X presents the ten highest-probability terms within each of the five estimated topics. The beta parameter represents the probability of a term conditional on a topic. Higher values indicate stronger representation within that topic, although they do not establish that a term is unique to it.
+The topic-term figure presents the ten highest-probability terms within each of the five estimated topics. The beta parameter represents the probability of a term conditional on a topic. Higher values indicate stronger representation within that topic, although they do not establish that a term is unique to it.
 
 ```{r da-topic-figure, fig.width=13, fig.height=11, dpi=150, out.width="100%"}
 # Visualise the ten highest-probability terms in each topic
@@ -598,10 +671,34 @@ ggsave(
 The LDA model estimates a mixture of topics for each sampled document. We identify each document's dominant topic using its highest estimated topic probability (gamma), then compare topic distributions across sources and years.
 
 ```{r}
-# Extract document-topic probabilities
-document_topics <- tidytext::tidy(
+# Extract training document-topic probabilities
+training_document_topics <- tidytext::tidy(
   lda_model,
   matrix = "gamma"
+) |>
+  mutate(split = "Training")
+
+# Infer topic probabilities for documents that were not used to fit LDA
+test_posterior <- topicmodels::posterior(
+  lda_model,
+  newdata = test_dtm
+)$topics
+
+testing_document_topics <- as.data.frame(test_posterior) |>
+  tibble::rownames_to_column("document") |>
+  tidyr::pivot_longer(
+    cols = -document,
+    names_to = "topic",
+    values_to = "gamma"
+  ) |>
+  mutate(
+    topic = as.integer(topic),
+    split = "Testing"
+  )
+
+document_topics <- bind_rows(
+  training_document_topics,
+  testing_document_topics
 )
 
 # Identify each document's dominant topic
@@ -654,6 +751,19 @@ topic_prevalence <- dominant_topics |>
 topic_prevalence |>
   select(source, topic, documents, percentage)
 
+readr::write_csv(
+  topic_prevalence |>
+    mutate(topic = as.character(topic)),
+  here::here("outputs", "tables", "lda_topic_prevalence.csv")
+)
+
+readr::write_csv(
+  dominant_topics |>
+    count(topic, name = "documents") |>
+    mutate(percentage = 100 * documents / sum(documents)),
+  here::here("outputs", "tables", "lda_topic_totals.csv")
+)
+
 # Visualise topic prevalence by source
 topic_prevalence_plot <- topic_prevalence |>
   ggplot(aes(x = source, y = percentage, fill = topic)) +
@@ -691,11 +801,11 @@ ggsave(
 
 The distribution of dominant LDA topics differs substantially across the three sources.
 
-**Reddit** is dominated by Topic 1 (57.16%), characterised by vaccination-related terms such as *vaccine, vaccinated, shot, dose* and *Pfizer*. Topic 2, associated with everyday experiences and practical concerns, accounts for another 21.22%.
+**Reddit** is dominated by Topic 3 (47.94%), characterised by vaccination-related terms such as *vaccine, vaccinated, shot, dose* and *Pfizer*. Topic 4, associated with personal and conversational language, accounts for 22.98%, while Topic 1, relating to health and medical discussion, accounts for 21.29%.
 
-**Twitter** also shows a strong concentration in Topic 1 (46.63%), followed by Topic 2 (22.89%). This suggests that the sampled Twitter and Reddit documents share an emphasis on vaccination and related experiences, although the proportions differ.
+**Twitter** also shows its largest concentration in Topic 3 (33.87%). Topics 1, 4 and 5 each make up substantial shares, indicating a broader mixture of health, personal and pandemic-related vocabulary than Reddit.
 
-**News articles** exhibit a different distribution. Topic 3 (37.07%), characterised by political figures and government-related terms, is the most prevalent. Topics 4 (23.25%) and 5 (23.18%), associated with public-health risks and broader pandemic coverage, also account for substantial proportions.
+**News articles** exhibit a different distribution. Topic 2 (35.44%), characterised by political figures and government-related terms, is the most prevalent. Topic 5 (24.52%), associated with wider pandemic and international coverage, is the next largest category.
 
 These findings suggest differences in the thematic emphasis of the sampled sources. However, the results should not be interpreted as representative of all activity on these platforms. Topic assignments are model-generated, and differences in sampling periods, document lengths and collection methods may influence the observed distributions.
 
@@ -790,11 +900,11 @@ ggsave(
 
 The quarterly analysis reveals differences in how vaccine-related themes evolved across the three sources between 2020 and 2025.
 
-**News:** The thematic composition changes noticeably over time. Topic 5, associated with broader pandemic and public-health coverage, is relatively prominent in the earlier quarters, while Topics 3 and 4, associated with political and public-health issues respectively, become more prominent in later periods.
+**News:** The thematic composition changes noticeably over time, with political coverage (Topic 2) and wider pandemic coverage (Topic 5) accounting for large but varying shares across quarters.
 
-**Reddit:** Topic 1, characterised by vaccination-related terminology, remains the dominant theme throughout the observation period. Other topics fluctuate in prevalence, but the overall distribution appears comparatively stable.
+**Reddit:** Topic 3, characterised by vaccination-related terminology, is the largest theme overall. Health and medical discussion (Topic 1) and personal conversation (Topic 4) also contribute substantial shares, with quarter-to-quarter fluctuations.
 
-**Twitter:** Topic 1 also dominates the nine observed quarters between 2020 and 2022. Topic 2 accounts for a noticeable share, particularly towards the later part of the dataset.
+**Twitter:** Topic 3 is also the largest theme overall during the nine observed quarters between 2020 and 2022, although its share and those of the other themes vary over time.
 
 Overall, the findings suggest that thematic emphasis varies by source and period. However, these patterns describe the sampled documents rather than population-level changes in public discourse. The smaller quarterly news samples and differences in source coverage limit direct comparisons.
 
@@ -1147,13 +1257,19 @@ saveRDS(
   dominant_topics,
   here::here("data", "processed", "dominant_topics.rds")
 )
+
+saveRDS(
+  lda_model,
+  here::here("data", "processed", "lda_model.rds")
+)
 ```
 
 ```{r}
 file.info(
   c(
     here::here("data", "processed", "lda_dtm.rds"),
-    here::here("data", "processed", "dominant_topics.rds")
+    here::here("data", "processed", "dominant_topics.rds"),
+    here::here("data", "processed", "lda_model.rds")
   )
 )$size / 1024^2
 ```
