@@ -3,11 +3,13 @@
 .Ruserdata
 .Rproj.user/
 
+# Keep raw datasets out of Git
 data/raw/*
-data/processed/*
-
 !data/raw/.gitkeep
-!data/processed/.gitkeep
+
+# Track all processed datasets
+!data/processed/
+!data/processed/**
 
 outputs/*
 !outputs/figures/
