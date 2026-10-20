@@ -1136,3 +1136,15 @@ ggsave(
   dpi = 300
 )
 ```
+
+```{r}
+saveRDS(
+  lda_dtm,
+  here::here("data", "processed", "lda_dtm.rds")
+)
+
+saveRDS(
+  dominant_topics,
+  here::here("data", "processed", "dominant_topics.rds")
+)
+```

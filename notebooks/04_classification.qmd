@@ -1,0 +1,524 @@
+---
+title: "classification"
+format: html
+editor: visual
+---
+
+## Classification
+
+```{r}
+install.packages("glmnet")
+```
+
+### Loading the classification dataset
+
+The sparse document-term matrix and dominant topic assignments generated during exploratory analysis were saved and loaded into the classification notebook. This allows the classifier to reuse the existing text features and topic labels without repeating the computationally intensive topic modelling process.
+
+```{r}
+library(here)
+library(dplyr)
+library(glmnet)
+library(Matrix)
+
+lda_dtm <- readRDS(
+  here::here("data", "processed", "lda_dtm.rds")
+)
+
+dominant_topics <- readRDS(
+  here::here("data", "processed", "dominant_topics.rds")
+)
+
+# Confirm both objects loaded correctly
+dim(lda_dtm)
+dim(dominant_topics)
+
+head(dominant_topics)
+```
+
+```{r}
+library(dplyr)
+library(glmnet)
+library(Matrix)
+
+set.seed(42)
+
+# Extract document IDs in the exact DTM row order.
+# rownames() works for ordinary matrices and sparse Matrix objects.
+# Use slam::row_ids() as a fallback for tm DocumentTermMatrix objects.
+dtm_ids <- rownames(lda_dtm)
+
+if (is.null(dtm_ids) && inherits(lda_dtm, "DocumentTermMatrix")) {
+  dtm_ids <- slam::row_ids(lda_dtm)
+}
+
+dtm_ids <- unname(as.character(dtm_ids))
+
+# Confirm that every DTM row has a usable document ID
+stopifnot(
+  !is.null(dtm_ids),
+  length(dtm_ids) == nrow(lda_dtm),
+  !anyNA(dtm_ids),
+  !any(dtm_ids == ""),
+  !anyDuplicated(dtm_ids)
+)
+
+# Standardise topic-table document IDs
+dominant_topics <- dominant_topics |>
+  mutate(document_id = as.character(document_id))
+
+# Check for duplicate topic assignments
+stopifnot(
+  !anyNA(dominant_topics$document_id),
+  !anyDuplicated(dominant_topics$document_id)
+)
+
+# Match topic labels directly to the DTM row order
+matched_rows <- match(
+  dtm_ids,
+  dominant_topics$document_id
+)
+
+# Report the number of DTM documents without topic labels
+missing_topic_labels <- sum(is.na(matched_rows))
+missing_topic_labels
+
+# Stop if any DTM documents lack topic labels
+if (missing_topic_labels > 0) {
+  missing_ids <- dtm_ids[is.na(matched_rows)]
+  
+  stop(
+    missing_topic_labels,
+    " DTM documents do not have topic labels. Examples: ",
+    paste(head(missing_ids, 10), collapse = ", ")
+  )
+}
+
+# Align topic labels to the exact DTM row order
+classifier_labels <- dominant_topics[
+  matched_rows,
+  ,
+  drop = FALSE
+] |>
+  mutate(
+    document_id = unname(as.character(document_id)),
+    topic = factor(topic)
+  )
+
+# Validate the alignment.
+# unname() avoids false failures caused only by names attributes.
+stopifnot(
+  length(matched_rows) == nrow(lda_dtm),
+  nrow(classifier_labels) == nrow(lda_dtm),
+  identical(
+    unname(as.character(classifier_labels$document_id)),
+    dtm_ids
+  ),
+  !anyNA(classifier_labels$topic)
+)
+
+# Convert the DTM to a sparse matrix
+classifier_matrix <- as(lda_dtm, "sparseMatrix")
+
+# Confirm that features and labels have the same number of documents
+stopifnot(
+  nrow(classifier_matrix) == nrow(classifier_labels)
+)
+
+# Inspect dimensions
+dim(classifier_matrix)
+nrow(classifier_labels)
+
+# Inspect topic distribution
+classifier_labels |>
+  count(topic, name = "documents") |>
+  mutate(
+    percentage = round(
+      100 * documents / sum(documents),
+      1
+    )
+  )
+```
+
+### Training and testing data
+
+The classification dataset was divided into training (80%) and testing (20%) subsets using stratified random sampling. Stratification preserves the relative distribution of the five topic classes and reduces the risk of underrepresenting smaller classes. The testing subset was reserved for final evaluation, while model fitting and hyperparameter selection would use only the training data.
+
+```{r}
+set.seed(42)
+
+# Create a stratified 80/20 split by topic
+train_indices <- classifier_labels |>
+  mutate(row_index = row_number()) |>
+  group_by(topic) |>
+  slice_sample(prop = 0.8) |>
+  ungroup() |>
+  pull(row_index) |>
+  sort()
+
+test_indices <- setdiff(
+  seq_len(nrow(classifier_labels)),
+  train_indices
+)
+
+# Split sparse features without converting to a dense matrix
+x_train <- classifier_matrix[train_indices, , drop = FALSE]
+x_test  <- classifier_matrix[test_indices, , drop = FALSE]
+
+y_train <- classifier_labels$topic[train_indices]
+y_test  <- classifier_labels$topic[test_indices]
+
+# Confirm sizes and class balance
+cat("Training documents:", nrow(x_train), "\n")
+cat("Testing documents:", nrow(x_test), "\n")
+
+split_balance <- bind_rows(
+  tibble(split = "Training", topic = y_train),
+  tibble(split = "Testing", topic = y_test)
+) |>
+  count(split, topic, name = "documents") |>
+  group_by(split) |>
+  mutate(
+    percentage = round(100 * documents / sum(documents), 1)
+  ) |>
+  ungroup()
+
+split_balance
+```
+
+### Multinomial lasso model
+
+A multinomial logistic regression model with lasso regularisation was fitted to predict the five LDA-derived topic classes from the sparse document-term matrix. The lasso penalty was selected because text data contain many potential predictors, most of which are absent from individual documents.
+
+Ten-fold cross-validation was performed using the training set to select the regularisation parameter, lambda. The held-out testing set was excluded from model fitting and hyperparameter selection.
+
+```{r}
+set.seed(42)
+
+lasso_cv <- glmnet::cv.glmnet(
+  x = x_train,
+  y = y_train,
+  family = "multinomial",
+  alpha = 1,
+  nfolds = 10,
+  type.measure = "class",
+  standardize = TRUE,
+  lambda.min.ratio = 0.01,
+  maxit = 200000
+)
+
+cat("Lambda minimum:", lasso_cv$lambda.min, "\n")
+cat("Lambda 1-SE:", lasso_cv$lambda.1se, "\n")
+
+plot(lasso_cv)
+
+lasso_model <- lasso_cv$glmnet.fit
+```
+
+### Held-out classification performance
+
+The fitted multinomial lasso classifier was evaluated on the reserved 20% testing subset, which was not used for model fitting or cross-validation. Predictions were generated using the regularisation parameter selected by minimum cross-validation error.
+
+Performance was assessed using overall accuracy, macro-averaged precision, recall and F1-score, and a confusion matrix. Macro-averaging gives equal importance to all five topic classes despite differences in their frequencies.
+
+```{r}
+# Predict topic labels for held-out documents
+test_predictions <- predict(
+  lasso_cv,
+  newx = x_test,
+  s = "lambda.min",
+  type = "class"
+)
+
+# Convert predictions to a factor with the same levels
+predicted_topics <- factor(
+  as.vector(test_predictions),
+  levels = levels(y_test)
+)
+
+# Construct confusion matrix
+confusion_matrix <- table(
+  Actual = y_test,
+  Predicted = predicted_topics
+)
+
+confusion_matrix
+
+# Overall accuracy
+test_accuracy <- mean(predicted_topics == y_test)
+
+# Calculate class-specific performance
+class_metrics <- tibble(
+  topic = levels(y_test),
+  true_positive = diag(confusion_matrix),
+  actual_total = rowSums(confusion_matrix),
+  predicted_total = colSums(confusion_matrix)
+) |>
+  mutate(
+    precision = if_else(
+      predicted_total > 0,
+      true_positive / predicted_total,
+      0
+    ),
+    recall = true_positive / actual_total,
+    f1 = if_else(
+      precision + recall > 0,
+      2 * precision * recall / (precision + recall),
+      0
+    )
+  )
+
+# Macro-averaged metrics
+macro_precision <- mean(class_metrics$precision)
+macro_recall <- mean(class_metrics$recall)
+macro_f1 <- mean(class_metrics$f1)
+
+cat("Test accuracy:", round(test_accuracy, 4), "\n")
+cat("Macro precision:", round(macro_precision, 4), "\n")
+cat("Macro recall:", round(macro_recall, 4), "\n")
+cat("Macro F1:", round(macro_f1, 4), "\n")
+
+class_metrics
+```
+
+### Classification performance
+
+The multinomial lasso classifier achieved a held-out accuracy of 67.27%, exceeding the majority-class baseline of 46.1% by approximately 21.2 percentage points. Macro-averaged precision, recall and F1-score were 0.690, 0.544 and 0.590, respectively.
+
+Performance differed considerably across topics. The classifier correctly identified 90.3% of documents assigned to Topic 1 (vaccination), but recall was lower for the remaining classes, particularly Topic 5 (broader public-health discourse), at 35.9%. The confusion matrix indicates that documents from smaller topics were frequently assigned to Topic 1, suggesting difficulty distinguishing overlapping thematic vocabulary.
+
+These findings demonstrate moderate agreement with the LDA-derived topic assignments. They do not establish independently validated thematic accuracy because the reference labels were generated by an unsupervised model fitted to the sampled corpus.
+
+### Influential terms in topic classification
+
+To interpret the classifier, the non-zero regression coefficients were extracted at the selected regularisation parameter. Positive coefficients indicate terms associated with higher predicted likelihood of a particular topic, conditional on the other terms in the model. The strongest positive coefficients were examined to identify vocabulary contributing to each topic's classification.
+
+```{r}
+# Extract coefficients at the selected lambda
+topic_coefficients <- coef(
+  lasso_cv,
+  s = "lambda.min"
+)
+
+# Convert the five topic coefficient matrices to a table
+coefficient_table <- purrr::imap_dfr(
+  topic_coefficients,
+  function(coef_matrix, topic_name) {
+    coefficient_values <- as.matrix(coef_matrix)
+    
+    tibble(
+      topic = topic_name,
+      term = rownames(coefficient_values),
+      coefficient = as.numeric(coefficient_values[, 1])
+    )
+  }
+) |>
+  filter(
+    term != "(Intercept)",
+    coefficient != 0
+  )
+
+# Select the ten strongest positive terms per topic
+top_classifier_terms <- coefficient_table |>
+  filter(coefficient > 0) |>
+  group_by(topic) |>
+  slice_max(
+    order_by = coefficient,
+    n = 10,
+    with_ties = FALSE
+  ) |>
+  arrange(topic, desc(coefficient)) |>
+  ungroup()
+
+top_classifier_terms |>
+  print(n = 50)
+```
+
+### Assessing coefficient interpretability
+
+The strongest positive classifier coefficients were examined alongside document frequency to determine whether highly weighted terms were common across the corpus or relatively rare. This distinction is important because a large coefficient does not necessarily indicate that a term is central to a topic. Rare terms may receive substantial weights despite appearing in comparatively few documents.
+
+```{r}
+# Count documents containing each term
+term_document_frequency <- Matrix::colSums(
+  classifier_matrix > 0
+)
+
+term_frequency_table <- tibble(
+  term = names(term_document_frequency),
+  document_frequency = as.numeric(term_document_frequency)
+)
+
+# Add document frequency to classifier coefficients
+coefficient_diagnostics <- top_classifier_terms |>
+  left_join(
+    term_frequency_table,
+    by = "term"
+  ) |>
+  mutate(
+    document_percentage = round(
+      100 * document_frequency / nrow(classifier_matrix),
+      2
+    )
+  ) |>
+  select(
+    topic,
+    term,
+    coefficient,
+    document_frequency,
+    document_percentage
+  )
+
+coefficient_diagnostics |>
+  print(n = 50)
+```
+
+### Term contributions to classifier predictions
+
+Because the largest lasso coefficients were concentrated among infrequent terms, coefficient magnitude alone was considered insufficient for identifying influential vocabulary across the corpus. To provide a complementary interpretation, positive term contributions were calculated by multiplying each document's term value by its fitted topic-specific coefficient.
+
+Average positive contributions were then computed across held-out documents assigned to each topic. This approach accounts for both the fitted coefficient and the occurrence of the term within documents, although it does not establish causal importance or independently validate the topic labels.
+
+```{r}
+# Extract the fitted coefficients at lambda.min
+topic_coefs <- coef(lasso_cv, s = "lambda.min")
+
+# Average positive contribution within each actual test topic
+term_contributions <- purrr::imap_dfr(
+  topic_coefs,
+  function(coef_matrix, topic_name) {
+    
+    beta <- as.numeric(coef_matrix[-1, 1])
+    names(beta) <- rownames(coef_matrix)[-1]
+    
+    # Restrict to test documents assigned to this topic
+    topic_rows <- which(as.character(y_test) == topic_name)
+    
+    # Average feature values across those documents
+    mean_features <- Matrix::colMeans(
+      x_test[topic_rows, , drop = FALSE]
+    )
+    
+    tibble(
+      topic = topic_name,
+      term = names(beta),
+      coefficient = beta,
+      mean_feature_value = as.numeric(mean_features),
+      mean_contribution = beta * as.numeric(mean_features)
+    )
+  }
+) |>
+  filter(
+    coefficient > 0,
+    mean_contribution > 0
+  )
+
+# Identify strongest average positive contributions
+top_contributing_terms <- term_contributions |>
+  group_by(topic) |>
+  slice_max(
+    mean_contribution,
+    n = 10,
+    with_ties = FALSE
+  ) |>
+  arrange(topic, desc(mean_contribution)) |>
+  ungroup()
+
+top_contributing_terms |>
+  select(topic, term, coefficient, mean_contribution) |>
+  print(n = 50)
+```
+
+### Visualising influential classification terms
+
+The ten terms with the highest average positive contributions were visualised for each topic. Unlike rankings based solely on coefficient magnitude, this measure incorporates both the fitted coefficient and the average occurrence of each term in held-out documents assigned to that topic.
+
+The results provide a descriptive explanation of the vocabulary contributing to the classifier's topic scores. They do not establish causal importance or guarantee that the identified terms are representative of the wider corpus.
+
+```{r}
+library(ggplot2)
+library(tidytext)
+
+# Prepare terms for a faceted horizontal bar chart
+plot_terms <- top_contributing_terms |>
+  mutate(
+    topic_label = paste("Topic", topic),
+    term_plot = tidytext::reorder_within(
+      term,
+      mean_contribution,
+      topic_label
+    )
+  )
+
+contribution_plot <- ggplot(
+  plot_terms,
+  aes(
+    x = mean_contribution,
+    y = term_plot
+  )
+) +
+  geom_col(
+    fill = "steelblue",
+    width = 0.55
+  ) +
+  tidytext::scale_y_reordered() +
+  facet_wrap(
+    ~ topic_label,
+    scales = "free",
+    ncol = 2
+  ) +
+  labs(
+    title = "Terms contributing most to lasso topic classification",
+    subtitle = "Average positive contributions in held-out documents",
+    x = "Mean positive contribution",
+    y = NULL,
+    caption = paste(
+      "Contributions are averaged within documents",
+      "assigned to each LDA topic."
+    )
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    strip.text = element_text(
+      face = "bold",
+      size = 11
+    ),
+    axis.text.y = element_text(size = 6.5, margin = margin(r = 8)),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(
+      face = "bold",
+      size = 14
+    )
+  )
+
+contribution_plot
+
+ggsave(
+  here::here(
+    "outputs", "figures",
+    "lasso_topic_contributions.png"
+  ),
+  plot = contribution_plot,
+  width = 12,
+  height = 15,
+  dpi = 300
+)
+```
+
+## Ethical Considerations and Study Limitations
+
+This study analysed publicly archived vaccination-related discussions from Twitter, Reddit and online news sources. Although these materials were publicly accessible, their availability does not automatically imply that contributors consented to their use in computational research. Accordingly, the analysis focused on aggregate patterns rather than identifying individual users or profiling their health beliefs.
+
+**Privacy and responsible data handling.** Social-media posts may contain personal experiences, health concerns and other potentially sensitive information. Even where usernames are omitted, verbatim quotations can sometimes be traced back to their authors. The study therefore prioritised aggregated statistics and avoided reproducing identifiable user-level content in its findings.
+
+**Representativeness and sampling bias.** The corpus combined material from platforms with different audiences, publication practices and collection methods. Twitter contributed substantially more documents than Reddit or news, while its available coverage ended in 2022. The news collection was also a selected sample rather than a complete archive. Consequently, differences between sources or across years cannot be interpreted as representative changes in public opinion.
+
+**Limitations of sentiment analysis.** Lexicon-based sentiment methods may misinterpret sarcasm, negation, informal expressions and context-dependent language. Negative words associated with disease, death or health risks do not necessarily indicate opposition to vaccination. Documents without recognised sentiment terms were classified as unclassified rather than assumed to be neutral.
+
+**Topic modelling and classification uncertainty.** LDA identifies statistical patterns of word co-occurrence rather than objectively established themes. Topic names were assigned through interpretation of their prominent terms. The multinomial lasso classifier was trained using these LDA-derived labels, meaning its reported accuracy reflects agreement with the topic model rather than performance against independently annotated ground truth. Its lower recall for minority topics further indicates uneven predictive performance.
+
+**Copyright and responsible reuse.** News articles and social-media content may remain subject to copyright, licensing conditions and platform-specific terms of use. Public availability does not necessarily authorise unrestricted redistribution. Any publication or sharing of the underlying corpus should therefore be assessed against applicable permissions and restrictions.
+
+**Interpretation and potential misuse.** Automated sentiment and topic assignments can oversimplify complex health discussions. They should not be used to identify individuals as vaccine supporters or opponents, infer medical conditions, or justify targeted interventions without appropriate safeguards and independent validation.
+
+Overall, the findings are best understood as exploratory patterns within the collected corpus, rather than definitive measurements of public attitudes towards vaccination.
