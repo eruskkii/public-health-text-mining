@@ -1148,3 +1148,12 @@ saveRDS(
   here::here("data", "processed", "dominant_topics.rds")
 )
 ```
+
+```{r}
+file.info(
+  c(
+    here::here("data", "processed", "lda_dtm.rds"),
+    here::here("data", "processed", "dominant_topics.rds")
+  )
+)$size / 1024^2
+```
