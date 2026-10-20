@@ -736,3 +736,403 @@ quarterly_topics |>
     .groups = "drop"
   )
 ```
+
+Quarterly topic prevalence was calculated as the percentage of sampled documents assigned to each dominant LDA topic within a source and quarter. This allows changes in thematic composition to be examined independently of the number of documents collected. Estimates for quarters with smaller samples, particularly news articles, should be interpreted cautiously.
+
+```{r}
+# Visualise quarterly changes in topic prevalence
+quarterly_topic_plot <- quarterly_topics |>
+  ggplot(aes(x = quarter, y = percentage, fill = topic)) +
+  geom_col(width = 80) +
+  facet_wrap(~ source, ncol = 1, scales = "free_x") +
+  scale_x_date(
+    date_breaks = "1 year",
+    date_labels = "%Y"
+  ) +
+  scale_y_continuous(
+    breaks = c(0, 50, 100),
+    labels = scales::label_percent(scale = 1),
+    limits = c(0, 100)
+  ) +
+  labs(
+    title = "How vaccine discourse themes changed over time",
+    subtitle = "Quarterly distribution of dominant LDA topics by source",
+    x = "Quarter",
+    y = "Percentage of sampled documents",
+    fill = "Topic",
+    caption = "Topic proportions are based on the stratified LDA sample."
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    plot.title = element_text(face = "bold", size = 12),
+    strip.text = element_text(face = "bold", size = 11),
+    axis.text.y = element_text(size = 8),
+    axis.text.x = element_text(size = 9),
+    panel.grid.major.x = element_blank(),
+    legend.position = "bottom"
+  )
+
+quarterly_topic_plot
+
+ggsave(
+  here::here(
+    "outputs", "figures",
+    "quarterly_topic_prevalence.png"
+  ),
+  plot = quarterly_topic_plot,
+  width = 12,
+  height = 10,
+  dpi = 300
+)
+```
+
+### Interpretation: Changes in topic prevalence over time
+
+The quarterly analysis reveals differences in how vaccine-related themes evolved across the three sources between 2020 and 2025.
+
+**News:** The thematic composition changes noticeably over time. Topic 5, associated with broader pandemic and public-health coverage, is relatively prominent in the earlier quarters, while Topics 3 and 4, associated with political and public-health issues respectively, become more prominent in later periods.
+
+**Reddit:** Topic 1, characterised by vaccination-related terminology, remains the dominant theme throughout the observation period. Other topics fluctuate in prevalence, but the overall distribution appears comparatively stable.
+
+**Twitter:** Topic 1 also dominates the nine observed quarters between 2020 and 2022. Topic 2 accounts for a noticeable share, particularly towards the later part of the dataset.
+
+Overall, the findings suggest that thematic emphasis varies by source and period. However, these patterns describe the sampled documents rather than population-level changes in public discourse. The smaller quarterly news samples and differences in source coverage limit direct comparisons.
+
+### Word co-occurrence network
+
+To complement individual term frequencies, a word co-occurrence network was constructed from the stratified text sample used for topic modelling. Two terms were considered connected when they appeared in the same document. The analysis identifies frequently associated terms and provides an additional exploratory view of the vocabulary underlying vaccine discourse.
+
+```{r}
+library(widyr)
+library(igraph)
+library(ggraph)
+
+# Select the 60 most frequent terms by document frequency
+network_vocabulary <- lda_tokens |>
+  distinct(document_id, word) |>
+  count(word, sort = TRUE) |>
+  slice_head(n = 60) |>
+  pull(word)
+
+# Calculate document-level word co-occurrences
+word_pairs <- lda_tokens |>
+  filter(word %in% network_vocabulary) |>
+  distinct(document_id, word) |>
+  widyr::pairwise_count(
+    item = word,
+    feature = document_id,
+    sort = TRUE,
+    upper = FALSE
+  )
+
+# Inspect the strongest connections
+word_pairs |>
+  slice_head(n = 20)
+```
+
+The co-occurrence network represents relationships between frequently used terms in the sampled corpus. Each connection indicates that two words appeared in the same document, with stronger connections representing more frequent co-occurrence. The visualisation focuses on the strongest associations and excludes selected generic terms to improve interpretability.
+
+```{r}
+# Remove selected generic terms from the network
+generic_terms <- c(
+  "including", "time", "day", "days",
+  "people", "lot", "thing", "things"
+)
+
+# Retain the strongest informative connections
+network_edges <- word_pairs |>
+  filter(
+    !item1 %in% generic_terms,
+    !item2 %in% generic_terms
+  ) |>
+  slice_max(order_by = n, n = 45, with_ties = FALSE)
+
+# Create an undirected word network
+word_network <- igraph::graph_from_data_frame(
+  network_edges,
+  directed = FALSE
+)
+
+# Use a fixed seed for reproducible positioning
+set.seed(42)
+
+network_plot <- ggraph::ggraph(
+  word_network,
+  layout = "fr"
+) +
+  ggraph::geom_edge_link(
+    aes(width = n),
+    colour = "grey65",
+    alpha = 0.55,
+    show.legend = FALSE
+  ) +
+  ggraph::geom_node_point(
+    colour = "steelblue",
+    size = 4
+  ) +
+  ggraph::geom_node_text(
+    aes(label = name),
+    repel = TRUE,
+    size = 3.5
+  ) +
+  ggraph::scale_edge_width(range = c(0.3, 2.5)) +
+  labs(
+    title = "Word co-occurrence network in vaccine discourse",
+    subtitle = "Strongest document-level word associations in the LDA sample",
+    caption = "Edges represent the number of sampled documents containing both terms."
+  ) +
+  theme_void(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", size = 15),
+    plot.subtitle = element_text(size = 10),
+    plot.margin = margin(20, 25, 20, 25)
+  )
+
+network_plot
+
+ggsave(
+  here::here(
+    "outputs", "figures",
+    "word_cooccurrence_network.png"
+  ),
+  plot = network_plot,
+  width = 12,
+  height = 9,
+  dpi = 300
+)
+```
+
+The word co-occurrence network shows that *vaccine* is the central connecting term among the strongest word associations in the sampled corpus. A closely connected group of terms, including *COVID*, *health*, *disease*, *pandemic* and *vaccines*, indicates substantial overlap between vaccination discussions and broader public-health discourse. References to government, administration and the president also suggest a policy-related dimension. However, these associations indicate shared document occurrence rather than causal relationships or agreement between concepts. The network is descriptive and should not be interpreted as evidence of distinct thematic communities without further analysis.
+
+## Sentiment around major public-health events
+
+To examine whether lexical sentiment varied around significant public-health announcements, three events were selected using independently documented dates from the World Health Organization. For each event, sentiment was examined within a 30-day period before and after the announcement.
+
+The analysis compares sources separately because their coverage periods and sampling methods differ. Mean sentiment is calculated among documents containing sentiment-lexicon matches, while document counts and classification coverage are reported to indicate the reliability of each comparison.
+
+These comparisons are descriptive. Changes observed around an event cannot, by themselves, establish that the announcement caused the change.
+
+```{r}
+
+# Define independently verified public-health events
+health_events <- tibble::tribble(
+  ~event, ~event_date,
+  "First WHO COVID-19 vaccine listing", as.Date("2020-12-31"),
+  "Omicron designated a variant of concern", as.Date("2021-11-26"),
+  "End of WHO COVID-19 emergency designation", as.Date("2023-05-05")
+)
+
+# Define a 30-day window on either side of each event
+event_documents <- tidyr::crossing(
+  document_sentiment,
+  health_events
+) |>
+  mutate(
+    relative_day = as.integer(date - event_date),
+    period = case_when(
+      relative_day >= -30 & relative_day <= -1 ~ "Before",
+      relative_day >= 1 & relative_day <= 30 ~ "After",
+      TRUE ~ NA_character_
+    )
+  ) |>
+  filter(!is.na(period)) |>
+  mutate(
+    period = factor(period, levels = c("Before", "After"))
+  )
+
+# Summarise sentiment and sample coverage
+event_summary <- event_documents |>
+  group_by(event, event_date, source, period) |>
+  summarise(
+    total_documents = n(),
+    scored_documents = sum(!is.na(sentiment_score)),
+    mean_sentiment = if (
+      all(is.na(sentiment_score))
+    ) NA_real_ else mean(sentiment_score, na.rm = TRUE),
+    negative_pct = 100 * mean(sentiment_class == "Negative"),
+    positive_pct = 100 * mean(sentiment_class == "Positive"),
+    unclassified_pct = 100 * mean(sentiment_class == "Unclassified"),
+    .groups = "drop"
+  ) |>
+  mutate(
+    coverage_pct = 100 * scored_documents / total_documents
+  )
+
+# Inspect results before plotting
+event_summary |>
+  arrange(event_date, source, period) |>
+  print(n = Inf)
+
+```
+
+```{r}
+# Compare mean sentiment before and after each event
+event_changes <- event_summary |>
+  select(
+    event, event_date, source, period,
+    total_documents, scored_documents, mean_sentiment
+  ) |>
+  tidyr::pivot_wider(
+    names_from = period,
+    values_from = c(
+      total_documents,
+      scored_documents,
+      mean_sentiment
+    )
+  ) |>
+  mutate(
+    sentiment_change = mean_sentiment_After -
+      mean_sentiment_Before,
+    sufficient_sample =
+      !is.na(scored_documents_Before) &
+      !is.na(scored_documents_After) &
+      scored_documents_Before >= 30 &
+      scored_documents_After >= 30
+  ) |>
+  arrange(event_date, source)
+
+event_changes |>
+  print(n = Inf)
+```
+
+```{r}
+# Plot before-and-after sentiment by event and source
+valid_comparisons <- event_changes |>
+  filter(sufficient_sample) |>
+  select(event, source)
+
+event_sentiment_plot <- event_summary |>
+  semi_join(valid_comparisons, by = c("event", "source")) |>
+  ggplot(
+    aes(
+      x = period,
+      y = mean_sentiment,
+      group = source,
+      colour = source
+    )
+  ) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed",
+    colour = "grey65"
+  ) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 2.8) +
+  facet_wrap(~ event, ncol = 1) +
+  labs(
+    title = "Sentiment around major public-health events",
+    subtitle = "Mean lexical sentiment, 30 days before versus after",
+    x = NULL,
+    y = "Mean sentiment score",
+    colour = "Source",
+    caption = paste(
+      "Only comparisons with at least 30 scored documents",
+      "in both periods are displayed."
+    )
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    strip.text = element_text(face = "bold", size = 10),
+    legend.position = "bottom",
+    panel.grid.minor = element_blank()
+  )
+
+event_sentiment_plot
+
+ggsave(
+  here::here(
+    "outputs", "figures",
+    "event_sentiment_comparison.png"
+  ),
+  plot = event_sentiment_plot,
+  width = 10,
+  height = 9,
+  dpi = 300
+)
+```
+
+### Interpretation
+
+Lexical sentiment varied across the selected public-health events and differed between Reddit and Twitter. Following the WHO's first COVID-19 vaccine emergency-use listing in December 2020, mean sentiment increased on Twitter from −0.036 to 0.040, while Reddit remained negative, declining slightly from −0.231 to −0.248.
+
+Around the designation of Omicron as a variant of concern in November 2021, Reddit's mean sentiment became less negative, increasing from −0.369 to −0.175. Twitter exhibited a smaller decline, from 0.053 to 0.021. Reddit also showed an improvement in mean sentiment around the end of the WHO's COVID-19 global health emergency designation in May 2023.
+
+News observations were insufficient for reliable comparisons under the selected minimum sample-size rule, while Twitter's coverage ended before the 2023 event. These results therefore illustrate source-specific patterns within the collected corpus rather than population-wide changes in public opinion. Furthermore, lexical sentiment measures emotional language, not necessarily attitudes towards vaccination, and the observed changes cannot be attributed causally to the selected events.
+
+### News sentiment around major public-health events
+
+Because the news corpus contains fewer documents than the social-media datasets, news sentiment is presented separately rather than excluded by the minimum sample-size threshold used for cross-source comparisons. The analysis retains the same 30-day observation windows and displays the number of articles contributing to each estimate.
+
+These estimates are exploratory and should be interpreted cautiously, particularly for event periods with fewer than 30 articles.
+
+```{r}
+news_event_summary <- event_summary |>
+  filter(source == "News") |>
+  mutate(
+    period_label = paste0(
+      period, "\n(n = ", scored_documents, ")"
+    )
+  )
+
+news_event_plot <- ggplot(
+  news_event_summary,
+  aes(
+    x = period,
+    y = mean_sentiment,
+    group = event
+  )
+) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed",
+    colour = "grey65"
+  ) +
+  geom_line(
+    colour = "steelblue",
+    linewidth = 0.9
+  ) +
+  geom_point(
+    colour = "steelblue",
+    size = 3
+  ) +
+  geom_text(
+    aes(
+      label = paste0(
+        "n = ", scored_documents,
+        "\n", round(mean_sentiment, 3)
+      )
+    ),
+    vjust = -0.8,
+    size = 3.3
+  ) +
+  facet_wrap(~ event, ncol = 1) +
+  scale_y_continuous(
+    limits = c(-0.4, 0.1),
+    breaks = seq(-0.4, 0.1, 0.1)
+  ) +
+  labs(
+    title = "News sentiment around major public-health events",
+    subtitle = "Mean lexical sentiment, 30 days before and after each event",
+    x = NULL,
+    y = "Mean sentiment score",
+    caption = "Labels show scored article counts and mean sentiment. Small samples limit precision."
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    strip.text = element_text(face = "bold", size = 10),
+    panel.grid.minor = element_blank()
+  )
+
+news_event_plot
+
+ggsave(
+  here::here(
+    "outputs", "figures",
+    "news_event_sentiment.png"
+  ),
+  plot = news_event_plot,
+  width = 10,
+  height = 9,
+  dpi = 300
+)
+```
