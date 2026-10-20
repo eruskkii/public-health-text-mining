@@ -1,0 +1,4 @@
+fastparquet==2026.9.0
+langdetect==1.0.9
+trafilatura==2.3.1
+

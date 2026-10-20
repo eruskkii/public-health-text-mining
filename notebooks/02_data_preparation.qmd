@@ -1,0 +1,168 @@
+---
+title: "02_data_preparation.qmd"
+author: "Group 4"
+format: html
+editor: visual
+---
+
+## Data Cleaning
+
+```{r}
+library(tidyverse)
+library(arrow)
+library(here)
+```
+
+```{r}
+tweets <- readr::read_csv(
+  here("data", "raw", "Tweet", "covidvaccine.csv"),
+  show_col_types = FALSE
+)
+
+cat("Tweet rows:", nrow(tweets), "\n")
+print(names(tweets))
+
+reddit_files <- list.files(
+  here("data", "raw", "reddit"),
+  pattern = "^vaccines_202[0-5]\\.parquet$",
+  full.names = TRUE
+)
+
+reddit <- purrr::map_dfr(reddit_files, arrow::read_parquet)
+
+cat("Reddit rows:", nrow(reddit), "\n")
+cat("Combined raw rows:", nrow(reddit) + nrow(tweets), "\n")
+```
+
+```{r}
+readr::problems(tweets) |> head(10)
+```
+
+```{r}
+glimpse(tweets$date)
+glimpse(reddit$created_utc)
+```
+
+```{r}
+# Inspect the newly acquired Media Cloud news corpus
+news <- arrow::read_parquet(
+  here::here("data", "processed", "vaccine_news.parquet")
+)
+
+glimpse(news)
+```
+
+```{r}
+# 1. Standardise Twitter
+# Handle the two observed date formats explicitly
+twitter_clean <- tweets |>
+  mutate(
+    parsed_date = dplyr::case_when(
+      str_detect(date, "^\\d{4}-\\d{2}-\\d{2}") ~
+        as.Date(substr(date, 1, 10), format = "%Y-%m-%d"),
+      
+      str_detect(date, "^\\d{2}-\\d{2}-\\d{4}") ~
+        as.Date(substr(date, 1, 10), format = "%d-%m-%Y"),
+      
+      TRUE ~ as.Date(NA)
+    )
+  ) |>
+  transmute(
+    document_id = paste0("twitter_", row_number()),
+    text = as.character(text),
+    date = parsed_date,
+    source = "Twitter",
+    source_type = "tweet",
+    dataset_origin = "Kaggle",
+    language = NA_character_
+  )
+
+# 2. Standardise Reddit
+reddit_clean <- reddit |>
+  transmute(
+    document_id = paste0("reddit_", id),
+    text = as.character(body),
+    date = as.Date(
+      as.POSIXct(created_utc, origin = "1970-01-01", tz = "UTC")
+    ),
+    source = "Reddit",
+    source_type = "reddit_comment",
+    dataset_origin = "Arctic Shift",
+    language = NA_character_
+  )
+
+# 3. Standardise news articles
+news_clean <- news |>
+  transmute(
+    document_id = document_id,
+    text = as.character(text),
+    date = as.Date(date),
+    source = "News",
+    source_type = "news_article",
+    dataset_origin = "Media Cloud",
+    language = as.character(language)
+  )
+
+# 4. Combine and clean all three sources
+vaccine_corpus <- bind_rows(
+  twitter_clean,
+  reddit_clean,
+  news_clean
+) |>
+  mutate(text = str_squish(text)) |>
+  filter(
+    !is.na(text),
+    text != "",
+    !text %in% c("[deleted]", "[removed]"),
+    !is.na(date),
+    date >= as.Date("2020-01-01"),
+    date <= as.Date("2025-12-31")
+  ) |>
+  distinct(source, text, date, .keep_all = TRUE)
+
+# 5. Verify final corpus
+vaccine_corpus |>
+  count(source)
+
+cat("Final documents:", nrow(vaccine_corpus), "\n")
+
+summary(vaccine_corpus$date)
+```
+
+```{r}
+tweets |>
+  count(substr(date, 1, 10), sort = TRUE) |>
+  head(10)
+
+twitter_clean |>
+  count(format(date, "%Y"), sort = TRUE)
+```
+
+```{r}
+twitter_clean |>
+  summarise(
+    total = n(),
+    valid_dates = sum(!is.na(date)),
+    missing_dates = sum(is.na(date)),
+    earliest = min(date, na.rm = TRUE),
+    latest = max(date, na.rm = TRUE)
+  )
+```
+
+```{r}
+vaccine_corpus |> count(source)
+
+cat("Final documents:", nrow(vaccine_corpus), "\n")
+
+vaccine_corpus |>
+  count(source, year = lubridate::year(date))
+```
+
+```{r}
+arrow::write_parquet(
+  vaccine_corpus,
+  here::here("data", "processed", "vaccine_corpus.parquet")
+)
+
+cat("Saved", nrow(vaccine_corpus), "documents.\n")
+```

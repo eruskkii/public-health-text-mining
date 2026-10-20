@@ -30,6 +30,7 @@ For each source, we record:
 - limitations
 
 ## Setup
+
 ```{r}
 library(tidyverse)
 library(httr2)
@@ -38,10 +39,10 @@ library(here)
 library(janitor)
 
 ```
+
 ## Experiment 1: GDELT
 
-We first test whether the GDELT DOC 2.0 API is accessible and inspect
-the structure of a small response before attempting large-scale collection.
+We first test whether the GDELT DOC 2.0 API is accessible and inspect the structure of a small response before attempting large-scale collection.
 
 ### Small test request
 
@@ -61,43 +62,32 @@ request
 
 response <- req_perform(request)
 ```
+
 ### Access issue
 
 The initial GDELT API test did not successfully return data.
 
-The first request timed out after 10 seconds. A subsequent request where we increased timeout reached
-the server but returned HTTP status 429 ("Too Many Requests"), indicating
-rate limiting at the API endpoint.
+The first request timed out after 10 seconds. A subsequent request where we increased timeout reached the server but returned HTTP status 429 ("Too Many Requests"), indicating rate limiting at the API endpoint.
 
 This presents a potential access constraint for large-scale collection. Since the proposed corpus requires at least 50,000 documents, repeated timeouts or rate limiting could make GDELT impractical within the project's timeframe. The source was therefore retained as a candidate but not relied upon as the sole acquisition route.
 
-
-
 ## Experiment 2: Archived COVID-19 vaccine corpus
 
-Following the access constraints encountered with the GDELT API, we
-investigated publicly archived social-media corpora.
+Following the access constraints encountered with the GDELT API, we investigated publicly archived social-media corpora.
 
-We first investigated the Large-scale COVID-19 Twitter Chatter Dataset hosted on Zenodo. Although the corpus is substantially larger than the 50,000-document requirement, the archived dataset primarily distributes tweet identifiers which would need hydrating through Twitter's API. 
+We first investigated the Large-scale COVID-19 Twitter Chatter Dataset hosted on Zenodo. Although the corpus is substantially larger than the 50,000-document requirement, the archived dataset primarily distributes tweet identifiers which would need hydrating through Twitter's API.
 
-The University of Maryland BSOS Social Science Data Repository hosts a
-public mirror of the *All COVID-19 Vaccines Tweets* dataset originally
-collected by Gabriel Preda.
+The University of Maryland BSOS Social Science Data Repository hosts a public mirror of the *All COVID-19 Vaccines Tweets* dataset originally collected by Gabriel Preda.
 
-The repository reports 228,207 observations and 25 variables, exceeding
-the assignment requirement of at least 50,000 documents.
+The repository reports 228,207 observations and 25 variables, exceeding the assignment requirement of at least 50,000 documents.
 
-Result
-The latest data is from 2021. So we're making the decision to move to a topic with more recent public discourse across a longer time frame.
+Result The latest data is from 2021. So we're making the decision to move to a topic with more recent public discourse across a longer time frame.
 
 ## Experiment 3: Common Crawl
 
-Common Crawl provides public web archives containing raw pages, metadata,
-and extracted plaintext. Unlike GDELT, its standard index is URL-based
-rather than a keyword search API.
+Common Crawl provides public web archives containing raw pages, metadata, and extracted plaintext. Unlike GDELT, its standard index is URL-based rather than a keyword search API.
 
-We first test whether R can query a recent crawl and retrieve records
-from the archive.
+We first test whether R can query a recent crawl and retrieve records from the archive.
 
 ```{r}
 cc_url <- "https://index.commoncrawl.org/CC-MAIN-2025-43-index"
@@ -113,22 +103,16 @@ cc_response <- req_perform(cc_request)
 
 resp_status(cc_response)
 ```
-Access issue
-The initial Common Crawl index request returned HTTP status 504 ("Gateway Timeout"). Although Common Crawl provides recent web archives and extracted plaintext, accessing and filtering the archive would require a more complex acquisition pipeline than initially anticipated.
-Given the project timeframe, Common Crawl was not selected as the primary acquisition route.
 
+Access issue The initial Common Crawl index request returned HTTP status 504 ("Gateway Timeout"). Although Common Crawl provides recent web archives and extracted plaintext, accessing and filtering the archive would require a more complex acquisition pipeline than initially anticipated. Given the project timeframe, Common Crawl was not selected as the primary acquisition route.
 
 ## Experiment 4: Mpox Instagram corpus
 
-Following the access constraints encountered with GDELT and Common Crawl,
-we tested an existing public corpus of Instagram posts about mpox.
+Following the access constraints encountered with GDELT and Common Crawl, we tested an existing public corpus of Instagram posts about mpox.
 
-The dataset contains 60,127 posts published between July 2022 and
-September 2024. It therefore independently exceeds the assignment's
-minimum corpus size of 50,000 documents.
+The dataset contains 60,127 posts published between July 2022 and September 2024. It therefore independently exceeds the assignment's minimum corpus size of 50,000 documents.
 
-We first use the Figshare API to inspect the files attached to the
-dataset before downloading the corpus.
+We first use the Figshare API to inspect the files attached to the dataset before downloading the corpus.
 
 ```{r}
 figshare_url <- "https://api.figshare.com/v2/articles/27072247/files"
@@ -140,19 +124,14 @@ figshare_response <- req_perform(figshare_request)
 
 resp_status(figshare_response)
 ```
-Result 
-404 error. Dataset is no longer available for download as I initially thought. 
 
+Result 404 error. Dataset is no longer available for download as I initially thought.
 
 ## Experiment 5: Reddit archive access with Arctic Shift
 
-Arctic Shift provides historical access to archived Reddit posts and
-comments. Before selecting a health topic, we test whether the archive
-can provide reproducible access to Reddit data and estimate document
-volumes over time.
+Arctic Shift provides historical access to archived Reddit posts and comments. Before selecting a health topic, we test whether the archive can provide reproducible access to Reddit data and estimate document volumes over time.
 
-The first test uses a single subreddit and a one-month period to avoid
-requesting a large volume of data before access is confirmed.
+The first test uses a single subreddit and a one-month period to avoid requesting a large volume of data before access is confirmed.
 
 ```{r}
 arctic_url <- paste0(
@@ -174,7 +153,8 @@ arctic_response <- req_perform(arctic_request)
 
 resp_status(arctic_response)
 ```
-We got a 200 HTTP response, so let's test what Arctic shift is giving us. 
+
+We got a 200 HTTP response, so let's test what Arctic shift is giving us.
 
 ```{r}
 arctic_counts <- resp_body_json(
@@ -184,7 +164,9 @@ arctic_counts <- resp_body_json(
 
 arctic_counts
 ```
+
 Testing the API for five year period
+
 ```{r}
 arctic_request_long <- request(arctic_url) |>
   req_url_query(
@@ -202,6 +184,7 @@ resp_status(arctic_response_long)
 
 
 ```
+
 We got successful HTTP request. So, let's see the actual data
 
 ```{r}
@@ -212,6 +195,7 @@ vaccines_monthly <- resp_body_json(
 
 vaccines_monthly
 ```
+
 Let's check comments
 
 ```{r}
@@ -237,17 +221,12 @@ comments_response <- comments_request |>
 resp_status(comments_response)
 resp_body_string(comments_response)
 ```
+
 ### Result
 
-A six-year aggregation request for comments returned a server-side timeout.
-Repeating the request for 2021 only succeeded (HTTP 200), returning monthly
-comment counts for the full year. This suggests that Arctic Shift is viable
-for historical Reddit acquisition, but requests should be divided into
-smaller time windows.
+A six-year aggregation request for comments returned a server-side timeout. Repeating the request for 2021 only succeeded (HTTP 200), returning monthly comment counts for the full year. This suggests that Arctic Shift is viable for historical Reddit acquisition, but requests should be divided into smaller time windows.
 
-We're going to write a function to test this. 
-
-
+We're going to write a function to test this.
 
 ```{r}
 get_comment_counts <- function(subreddit, year) {
@@ -289,11 +268,13 @@ Test function
 ```{r}
 comments_2021 <- get_comment_counts("vaccines", 2021)
 ```
+
 Display result
 
 ```{r}
 comments_2021
 ```
+
 ```{r}
 vaccines_comments <- purrr::map_dfr(
   2020:2025,
@@ -302,6 +283,7 @@ vaccines_comments <- purrr::map_dfr(
 
 vaccines_comments
 ```
+
 ```{r}
 get_comment_counts("vaccines", 2020)
 ```
@@ -309,6 +291,7 @@ get_comment_counts("vaccines", 2020)
 ```{r}
 get_comment_counts("vaccines", 2021)
 ```
+
 ```{r}
 get_comment_counts_with_retry <- function(subreddit, year, max_attempts = 3) {
 
@@ -352,6 +335,7 @@ vaccines_comments <- purrr::map_dfr(
 
 vaccines_comments
 ```
+
 We've been able to write a function that loops through reddit across several years. We have the count for 2020 to 2025, and we'd save in a parquet
 
 ```{r}
@@ -374,11 +358,13 @@ vaccines_comments <- vaccines_comments |>
   )
 
 ```
+
 tnen sum
 
 ```{r}
 sum(vaccines_comments$count)
 ```
+
 Let's try to get comments
 
 ```{r}
@@ -402,8 +388,8 @@ sample_response <- sample_request |>
 
 resp_status(sample_response)
 ```
-Then test
 
+Then test
 
 ```{r}
 sample_body <- resp_body_json(
@@ -413,14 +399,13 @@ sample_body <- resp_body_json(
 
 sample_body$data
 ```
+
 ```{r}
 names(sample_body$data)
 
 ```
 
-TIme to create a function to get this data for real. 
-
-
+TIme to create a function to get this data for real.
 
 ```{r}
 comments_url <- paste0(
@@ -486,6 +471,7 @@ batch_1 <- get_comment_batch(
 
 nrow(batch_1)
 ```
+
 Check
 
 ```{r}
@@ -493,14 +479,17 @@ head(batch_1)
 tail(batch_1)
 
 ```
-Checking the last timestamp for the first 100. 
+
+Checking the last timestamp for the first 100.
 
 ```{r}
 last_timestamp <- tail(batch_1$created_utc, 1)
 
 last_timestamp
 ```
+
 Second batch
+
 ```{r}
 batch_2 <- get_comment_batch(
   subreddit = "vaccines",
@@ -513,15 +502,17 @@ nrow(batch_2)
 ```
 
 Check for intersection
+
 ```{r}
 intersect(batch_1$id, batch_2$id)
 ```
+
 ```{r}
 tail(batch_1[, c("id", "created_utc")])
 head(batch_2[, c("id", "created_utc")])
 ```
 
-Bind the rows. 
+Bind the rows.
 
 ```{r}
 first_200 <- dplyr::bind_rows(
@@ -533,6 +524,7 @@ nrow(first_200)
 ```
 
 Save the data
+
 ```{r}
 dir.create(
   here::here("data", "raw", "reddit"),
@@ -551,9 +543,9 @@ arrow::write_parquet(
 )
 ```
 
-We've tested the batches. Let's try the downloader function. We will implemeent retries, timeout, and wait time between each requests. 
+We've tested the batches. Let's try the downloader function. We will implemeent retries, timeout, and wait time between each requests.
 
-First, we update our getcomment function with retries and Cat will be used to display messages on the terminal. 
+First, we update our getcomment function with retries and Cat will be used to display messages on the terminal.
 
 ```{r}
 get_comment_batch_with_retry <- function(
@@ -683,7 +675,9 @@ vaccines_2020 <- download_reddit_year(
   year = 2020
 )
 ```
-Our downloader for 2020 worked. So I'm using my engineering instincts to create a separate function for saving data. We can pass anything through the function be it the reddit data or later data from news archives. 
+
+Our downloader for 2020 worked. So I'm using my engineering instincts to create a separate function for saving data. We can pass anything through the function be it the reddit data or later data from news archives.
+
 ```{r}
 save_raw_data <- function(
     data,
@@ -734,6 +728,7 @@ save_raw_data(
   filename = "vaccines_2020"
 )
 ```
+
 ```{r}
 vaccines_comments |>
   dplyr::filter(
@@ -751,7 +746,8 @@ vaccines_2021 <- download_reddit_year(
   year = 2021
 )
 ```
-Now to confirm if it matches our earlier count. 
+
+Now to confirm if it matches our earlier count.
 
 ```{r}
 vaccines_comments |>
@@ -770,6 +766,7 @@ save_raw_data(
   filename = "vaccines_2021"
 )
 ```
+
 Downloaidng 2022
 
 ```{r}
@@ -778,6 +775,7 @@ vaccines_2022 <- download_reddit_year(
   year = 2022
 )
 ```
+
 ```{r}
 vaccines_comments |>
   dplyr::filter(
@@ -795,6 +793,7 @@ save_raw_data(
   filename = "vaccines_2022"
 )
 ```
+
 Now 2023
 
 ```{r}
@@ -803,6 +802,7 @@ vaccines_2023 <- download_reddit_year(
   year = 2023
 )
 ```
+
 ```{r}
 vaccines_comments |>
   dplyr::filter(
@@ -813,12 +813,14 @@ vaccines_comments |>
     expected = sum(count)
   )
 ```
+
 ```{r}
 save_raw_data(
   data = vaccines_2023,
   filename = "vaccines_2023"
 )
 ```
+
 Now 2024
 
 ```{r}
@@ -845,13 +847,16 @@ save_raw_data(
   filename = "vaccines_2024"
 )
 ```
+
 Now 2025
+
 ```{r}
 vaccines_2025 <- download_reddit_year(
   subreddit = "vaccines",
   year = 2025
 )
 ```
+
 ```{r}
 vaccines_comments |>
   dplyr::filter(
@@ -862,12 +867,14 @@ vaccines_comments |>
     expected = sum(count)
   )
 ```
+
 ```{r}
 save_raw_data(
   data = vaccines_2025,
   filename = "vaccines_2025"
 )
 ```
+
 ```{r}
 vaccines_2020 <- arrow::read_parquet(
   here::here(
@@ -883,3 +890,19 @@ vaccines_2020 <- arrow::read_parquet(
 View(vaccines_2020)
 ```
 
+34,819 is now our verified Reddit raw count for comments. We'd do Posts then news sources later.
+
+```{r}
+vaccines_2021 <- arrow::read_parquet(
+  here::here(
+    "data",
+    "raw",
+    "reddit",
+    "vaccines_2021.parquet"
+  )
+)
+```
+
+```{r}
+View(vaccines_2021)
+```

@@ -1,0 +1,738 @@
+---
+title: "03_exploratory_analysis.qmd"
+author: "Group 4"
+format: html
+editor: visual
+---
+
+## Exploratory Data Analysis
+
+```{r}
+library(tidyverse)
+library(arrow)
+library(here)
+library(lubridate)
+library(tidytext)
+
+
+
+```
+
+```{r}
+vaccine_corpus <- arrow::read_parquet(
+  here("data", "processed", "vaccine_corpus.parquet")
+)
+
+glimpse(vaccine_corpus)
+```
+
+```         
+```
+
+## 3.1 Temporal Distribution of Vaccine Discourse
+
+We examine the monthly distribution of vaccine-related documents across three sources: Twitter/X, Reddit and online news articles. Documents were grouped by publication month to describe the temporal coverage and composition of the collected corpus.
+
+The sources are displayed in separate panels with independent vertical scales because their document counts differ substantially. These frequencies represent the distribution of documents within the collected datasets, rather than estimates of total vaccine-related activity across the platforms or news media.
+
+```{r}
+# Monthly document counts by source
+monthly_counts <- vaccine_corpus |>
+  mutate(month = lubridate::floor_date(date, "month")) |>
+  count(source, month, name = "documents")
+
+# Plot monthly counts separately for each source
+ggplot(monthly_counts, aes(x = month, y = documents)) +
+  geom_line(colour = "#2878B5", linewidth = 0.8) +
+  facet_wrap(~ source, scales = "free_y", ncol = 1) +
+  labs(
+    title = "Monthly volume of vaccine discourse by platform",
+    subtitle = "Counts reflect the collected datasets, not total platform activity",
+    x = "Month",
+    y = "Documents"
+  ) +
+  theme_minimal(base_size = 12)
+
+# Save figure
+ggsave(
+  here("outputs", "figures", "monthly_document_counts.png"),
+  width = 10,
+  height = 6,
+  dpi = 300
+)
+```
+
+### Interpretation
+
+Figure 1 reveals distinct temporal patterns across the three sources.
+
+The Twitter/X dataset is heavily concentrated in 2021, with a pronounced peak during the early part of that year and declining document counts towards September 2022. Reddit exhibits substantial fluctuations during 2021, followed by relatively low counts in 2022–2023 and renewed increases during 2024–2025.
+
+The news sample shows a more continuous distribution across 2020–2025, although monthly counts fluctuate. Unlike the Reddit and Twitter datasets, the news corpus was constructed through a year-stratified sampling procedure, meaning that its temporal distribution partly reflects the acquisition design.
+
+These differences highlight the importance of accounting for sampling methods, dataset size and observation periods when comparing sources. In particular, changes in document counts cannot be interpreted directly as changes in public interest or media attention.
+
+## 3.2 Term-Frequency Analysis
+
+To identify prominent vocabulary within the collected vaccine discourse, documents were tokenised into individual words. Common English stopwords, URLs, HTML artefacts and non-alphabetic tokens were removed.
+
+The 15 most frequent terms were calculated separately for Twitter/X, Reddit and online news. Source-specific panels were used because the datasets differ considerably in size and document length.
+
+During preliminary inspection, the term *covidvaccine* was found to dominate Twitter/X vocabulary. As this term may reflect the original dataset's collection criteria, it was excluded from the revised descriptive frequency chart while remaining in the underlying corpus.
+
+Word frequencies provide an initial description of prominent vocabulary but do not, by themselves, establish discussion themes or attitudes towards vaccination.
+
+```{r}
+library(tidytext)
+
+# Tokenise text and remove common English stopwords
+# Remove URLs, HTML artefacts and common social-media noise
+text_ready <- vaccine_corpus |>
+  mutate(
+    text = str_remove_all(text, "https?://\\S+|www\\.\\S+"),
+    text = str_replace_all(text, "&amp;|&amp", " "),
+    text = str_replace_all(text, "#", "")
+  )
+
+# Tokenise and remove stopwords and uninformative terms
+tokens <- text_ready |>
+  select(document_id, source, text) |>
+  tidytext::unnest_tokens(word, text) |>
+  anti_join(tidytext::stop_words, by = "word") |>
+  filter(
+    str_detect(word, "^[a-z]+$"),
+    nchar(word) >= 3,
+    !word %in% c("https", "http", "www", "amp", "covidvaccine")
+  )
+
+# Recalculate most frequent terms
+top_words <- tokens |>
+  count(source, word, sort = TRUE) |>
+  group_by(source) |>
+  slice_max(n, n = 15, with_ties = FALSE) |>
+  ungroup()
+
+# Count the 15 most frequent words per platform
+top_words <- tokens |>
+  count(source, word, sort = TRUE) |>
+  group_by(source) |>
+  slice_max(n, n = 15, with_ties = FALSE) |>
+  ungroup()
+
+# Plot
+ggplot(
+  top_words,
+  aes(x = reorder_within(word, n, source), y = n)
+) +
+  geom_col(fill = "#2878B5") +
+  facet_wrap(~source, scales = "free") +
+  tidytext::scale_x_reordered() +
+  coord_flip() +
+  labs(
+    title = "Most frequent terms in vaccine discourse",
+    x = NULL,
+    y = "Word occurrences"
+  ) +
+  scale_y_continuous(labels = scales::label_number(scale_cut = scales::cut_short_scale())) +
+  theme_minimal(base_size = 10) +
+  theme(
+    axis.text.x = element_text(size = 8),
+    axis.text.y = element_text(size = 9),
+    strip.text = element_text(size = 11, face = "bold")
+  )
+
+ggsave(
+  here("outputs", "figures", "top_terms_by_source.png"),
+  width = 10,
+  height = 7,
+  dpi = 300
+)
+```
+
+### Interpretation
+
+Figure 2 demonstrates differences in the vocabulary represented across the three sources.
+
+Online news articles prominently feature terms such as *vaccine*, *COVID*, *health*, *public*, *president* and *government*, indicating substantial attention to public-health policy and political institutions. The appearance of names such as *Trump* and *Kennedy* also suggests the presence of political reporting within the news sample.
+
+Reddit comments contain terms including *shot*, *dose*, *effects*, *risk*, *flu* and *doctor*. These terms are consistent with discussions involving vaccination experiences, perceived risks and medical considerations, although their frequency alone does not establish the specific positions expressed.
+
+Twitter/X displays a particularly strong concentration of COVID-19 vaccination terminology, alongside terms such as *slots*, *free*, *paid*, *Pfizer*, *Covishield* and *availability*. This vocabulary suggests that vaccine access and distribution may be important subjects within the collected tweets.
+
+The dominance of *covidvaccine* in the preliminary analysis also demonstrates how dataset collection procedures can influence term frequencies. Accordingly, subsequent topic and sentiment analyses will be interpreted in light of differences in source composition, sampling and document length.
+
+## 3.3 Sentiment Analysis
+
+Lexicon-based sentiment analysis was conducted to examine differences in emotional language across Twitter/X, Reddit and online news articles.
+
+The Bing sentiment lexicon was used to classify individual words as positive or negative. For each document, a normalised sentiment score was calculated as the difference between positive and negative word counts divided by the total number of matched sentiment words.
+
+Documents without any lexicon matches were assigned an unclassified status rather than being treated as neutral. Documents with equal positive and negative counts were classified as neutral.
+
+The analysis examines the distribution of document-level sentiment classifications across sources and monthly changes in average sentiment. These classifications represent lexical sentiment rather than verified attitudes towards vaccination, as words may express emotions about disease, government policy or personal experiences rather than vaccines themselves.
+
+```{r}
+# Load the Bing positive/negative sentiment lexicon
+bing <- tidytext::get_sentiments("bing")
+
+# Count positive and negative sentiment words per document
+sentiment_matches <- tokens |>
+  inner_join(bing, by = "word") |>
+  count(document_id, source, sentiment, name = "n") |>
+  tidyr::pivot_wider(
+    names_from = sentiment,
+    values_from = n,
+    values_fill = 0
+  )
+
+# Ensure both sentiment columns exist
+if (!"positive" %in% names(sentiment_matches)) {
+  sentiment_matches$positive <- 0L
+}
+if (!"negative" %in% names(sentiment_matches)) {
+  sentiment_matches$negative <- 0L
+}
+
+# Calculate normalised sentiment for every document
+document_sentiment <- vaccine_corpus |>
+  select(document_id, source, date) |>
+  left_join(
+    sentiment_matches |>
+      select(document_id, positive, negative),
+    by = "document_id"
+  ) |>
+  mutate(
+    positive = replace_na(positive, 0L),
+    negative = replace_na(negative, 0L),
+    matched_words = positive + negative,
+    sentiment_score = if_else(
+      matched_words > 0,
+      (positive - negative) / matched_words,
+      NA_real_
+    ),
+    sentiment_class = case_when(
+      matched_words == 0 ~ "Unclassified",
+      sentiment_score > 0 ~ "Positive",
+      sentiment_score < 0 ~ "Negative",
+      TRUE ~ "Neutral"
+    )
+  )
+
+# Inspect the classification distribution
+document_sentiment |>
+  count(source, sentiment_class) |>
+  group_by(source) |>
+  mutate(percentage = round(100 * n / sum(n), 1)) |>
+  ungroup()
+```
+
+```{r}
+document_sentiment |>
+  count(source, sentiment_class) |>
+  group_by(source) |>
+  mutate(percentage = round(100 * n / sum(n), 2)) |>
+  arrange(source, desc(percentage)) |>
+  ungroup()
+```
+
+```{r}
+# Calculate the proportion of each sentiment class within each source
+sentiment_distribution <- document_sentiment |>
+  count(source, sentiment_class) |>
+  group_by(source) |>
+  mutate(percentage = 100 * n / sum(n)) |>
+  ungroup()
+
+# Compare sentiment distributions across the three sources
+ggplot(
+  sentiment_distribution,
+  aes(x = source, y = percentage, fill = sentiment_class)
+) +
+  geom_col(width = 0.65) +
+  scale_y_continuous(labels = scales::label_percent(scale = 1)) +
+  labs(
+    title = "Distribution of lexical sentiment by source",
+    subtitle = "Includes documents without sentiment lexicon matches",
+    x = "Source",
+    y = "Percentage of documents",
+    fill = "Sentiment"
+  ) +
+  theme_minimal(base_size = 11)
+
+# Export Figure 3
+ggsave(
+  here("outputs", "figures", "sentiment_distribution.png"),
+  width = 10,
+  height = 6,
+  dpi = 300
+)
+```
+
+### Interpretation
+
+Figure 3 reveals substantial differences in lexical sentiment across the three sources. Negative sentiment predominates in the news corpus (70.21%) and Reddit comments (43.14%), compared with 24.20% of Twitter/X documents. Positive classifications account for 26.23% of news articles, 18.31% of Reddit comments and 26.11% of tweets.
+
+The proportion of unclassified documents varies considerably, reaching 44.52% on Twitter/X and 30.47% on Reddit, while every news article contains at least one sentiment-bearing word. This difference may partly reflect the greater length of news articles and the limited coverage of informal social-media language by the Bing lexicon.
+
+These findings describe the distribution of positive and negative vocabulary, not attitudes towards vaccination. Negative terms may refer to disease outbreaks, deaths, adverse events or political controversy rather than vaccine opposition. Differences in sampling methods and observation periods also limit direct comparisons between sources.
+
+## 3.4 Temporal Trends in Sentiment
+
+To examine changes in sentiment over time, document-level sentiment scores were aggregated by publication month and source. The monthly mean was calculated using documents containing at least one word matched by the Bing lexicon.
+
+Positive values indicate a greater relative presence of positive vocabulary, while negative values indicate a greater relative presence of negative vocabulary. Monthly document counts were retained to assess the amount of evidence underlying each estimate.
+
+Because the three datasets have different observation periods and collection procedures, temporal patterns are examined separately rather than interpreted as directly comparable measures of public sentiment.
+
+```{r}
+# Calculate monthly sentiment trends
+monthly_sentiment <- document_sentiment |>
+  filter(!is.na(sentiment_score)) |>
+  mutate(month = lubridate::floor_date(date, "month")) |>
+  group_by(source, month) |>
+  summarise(
+    mean_sentiment = mean(sentiment_score),
+    median_sentiment = median(sentiment_score),
+    documents = n(),
+    .groups = "drop"
+  )
+
+# Inspect monthly coverage and sentiment
+monthly_sentiment |>
+  group_by(source) |>
+  summarise(
+    months = n(),
+    documents = sum(documents),
+    overall_monthly_mean = round(mean(mean_sentiment), 3),
+    .groups = "drop"
+  )
+
+# Aggregate news sentiment quarterly
+news_quarterly <- document_sentiment |>
+  filter(source == "News", !is.na(sentiment_score)) |>
+  mutate(period = lubridate::floor_date(date, "quarter")) |>
+  group_by(period) |>
+  summarise(
+    mean_sentiment = mean(sentiment_score),
+    documents = n(),
+    .groups = "drop"
+  ) |>
+  mutate(source = "News (quarterly)")
+
+# Keep Reddit and Twitter at monthly resolution
+social_monthly <- monthly_sentiment |>
+  filter(source %in% c("Reddit", "Twitter")) |>
+  transmute(
+    source = paste0(source, " (monthly)"),
+    period = month,
+    mean_sentiment,
+    documents
+  )
+
+# Combine plotting data
+sentiment_plot_data <- bind_rows(
+  news_quarterly,
+  social_monthly
+) |>
+  mutate(
+    source = factor(
+      source,
+      levels = c(
+        "News (quarterly)",
+        "Reddit (monthly)",
+        "Twitter (monthly)"
+      )
+    )
+  )
+
+# Plot
+sentiment_trend_plot <- ggplot(
+  sentiment_plot_data,
+  aes(x = period, y = mean_sentiment)
+) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed",
+    colour = "grey55"
+  ) +
+  geom_line(
+    aes(group = source),
+    colour = "steelblue",
+    linewidth = 0.7
+  ) +
+  geom_point(
+    data = sentiment_plot_data |>
+      dplyr::filter(
+        source == "News (quarterly)",
+        documents < 30
+      ),
+    colour = "red",
+    size = 2
+  ) +
+  facet_wrap(~ source, ncol = 1) +
+  scale_x_date(
+    date_breaks = "1 year",
+    date_labels = "%Y"
+  ) +
+  labs(
+    title = "Temporal trends in vaccine-related lexical sentiment",
+    subtitle = "Quarterly news and monthly social-media estimates",
+    x = "Publication period",
+    y = "Mean normalised sentiment score",
+    caption = "Red points identify news quarters with fewer than 30 classified articles."
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    strip.text = element_text(face = "bold"),
+    plot.caption = element_text(size = 8)
+  )
+
+sentiment_trend_plot
+
+ggsave(
+  here::here("outputs", "figures", "monthly_sentiment.png"),
+  plot = sentiment_trend_plot,
+  width = 11,
+  height = 8,
+  dpi = 300
+)
+```
+
+### Assessment of Temporal Sample Sizes
+
+Monthly sample sizes were examined to assess the stability of sentiment estimates. Reddit and Twitter/X contained at least 33 and 608 classified documents per month, respectively. In contrast, the news corpus had a median of only 16.5 articles per month, with 65 of 72 months containing fewer than 30 articles.
+
+Consequently, monthly news sentiment estimates were considered exploratory and potentially unstable. A coarser temporal aggregation was evaluated to provide a more defensible representation of news sentiment over time. The 30-document threshold was used as a descriptive screening rule rather than a formal statistical guarantee of precision.
+
+```{r}
+monthly_sentiment |>
+  group_by(source) |>
+  summarise(
+    minimum_monthly_n = min(documents),
+    median_monthly_n = median(documents),
+    months_below_30 = sum(documents < 30),
+    .groups = "drop"
+  )
+```
+
+```{r}
+news_quarterly_check <- document_sentiment |>
+  filter(source == "News", !is.na(sentiment_score)) |>
+  mutate(quarter = lubridate::floor_date(date, "quarter")) |>
+  count(quarter, name = "documents")
+
+news_quarterly_check |>
+  summarise(
+    quarters = n(),
+    minimum_n = min(documents),
+    median_n = median(documents),
+    quarters_below_30 = sum(documents < 30)
+  )
+```
+
+### Interpretation
+
+Figure 4 presents temporal trends in lexical sentiment using quarterly estimates for news articles and monthly estimates for Reddit and Twitter/X.
+
+The news corpus contains 1,346 classified articles distributed across 24 quarters. Quarterly aggregation was selected because 65 of the 72 individual months contained fewer than 30 articles. At the quarterly level, 22 of 24 periods met the descriptive screening threshold of 30 documents. The remaining two quarters are highlighted in the figure.
+
+Reddit sentiment remains predominantly negative throughout 2020–2025, while Twitter/X sentiment fluctuates around zero during its shorter observation period, ending in September 2022. The earlier monthly news analysis also indicated predominantly negative lexical sentiment, although individual monthly estimates were often based on small samples.
+
+These patterns describe sentiment-bearing vocabulary within the collected datasets rather than changes in vaccine acceptance. Differences in temporal coverage, document length and acquisition methods limit direct comparisons across sources.
+
+## 3.5 Topic Modelling Using Latent Dirichlet Allocation
+
+Latent Dirichlet Allocation (LDA) was employed to identify recurring themes within the vaccine-related corpus. LDA is an unsupervised probabilistic model that represents documents as mixtures of topics and topics as distributions over words.
+
+To manage computational demands and reduce the dominance of the substantially larger Twitter/X dataset, a reproducible stratified sample was drawn from the three sources. The initial model used up to 5,000 documents per source, selected with a fixed random seed.
+
+The sampled documents were tokenised and converted into a sparse document-term matrix. Common stopwords, URL artefacts, and extremely rare or ubiquitous terms were excluded. An initial six-topic model was fitted, with the most probable terms examined to interpret each topic.
+
+The resulting topics represent statistical patterns of word co-occurrence and require substantive interpretation. They should not be treated as independently verified categories of public opinion.
+
+```{r}
+library(topicmodels)
+library(tidytext)
+library(dplyr)
+library(stringr)
+
+# Reproducible sampling of up to 5,000 documents per source
+set.seed(42)
+
+lda_sample <- vaccine_corpus |>
+  group_by(source) |>
+  group_modify(~ dplyr::slice_sample(
+    .x,
+    n = min(nrow(.x), 5000)
+  )) |>
+  ungroup() |>
+  select(document_id, source, date, text)
+
+# Inspect the sample
+lda_sample |>
+  count(source)
+```
+
+## Building the document term matrix
+
+```{r}
+# Tokenise sampled documents
+lda_tokens <- lda_sample |>
+  unnest_tokens(word, text) |>
+  filter(
+    str_detect(word, "^[a-z]{3,}$"),
+    !word %in% c("https", "http", "www", "amp", "covidvaccine")
+  ) |>
+  anti_join(stop_words, by = "word")
+
+# Count terms within documents
+lda_term_counts <- lda_tokens |>
+  count(document_id, word, name = "n")
+
+# Retain terms appearing in at least 10 documents
+vocabulary <- lda_term_counts |>
+  distinct(document_id, word) |>
+  count(word, name = "document_frequency") |>
+  filter(document_frequency >= 10)
+
+lda_term_counts <- lda_term_counts |>
+  semi_join(vocabulary, by = "word")
+
+# Create sparse document-term matrix
+lda_dtm <- lda_term_counts |>
+  cast_dtm(document_id, word, n)
+
+# Check dimensions
+dim(lda_dtm)
+```
+
+### Topic Modelling Using Latent Dirichlet Allocation
+
+To identify recurring themes in vaccine discourse, we applied Latent Dirichlet Allocation (LDA) to a stratified sample of documents from Twitter, Reddit and news articles. Following tokenisation, stop-word removal and vocabulary filtering, the resulting document-term matrix contained 11,088 documents and 7,685 terms. We initially specified five topics to obtain an interpretable exploratory model.
+
+```{r}
+# Fit a five-topic Latent Dirichlet Allocation model
+library(topicmodels)
+
+set.seed(42)
+
+lda_model <- LDA(
+  lda_dtm,
+  k = 5,
+  method = "Gibbs",
+  control = list(
+    seed = 42,
+    burnin = 500,
+    iter = 1000,
+    thin = 100
+  )
+)
+
+# Extract the ten most probable terms per topic
+lda_topics <- tidytext::tidy(
+  lda_model,
+  matrix = "beta"
+)
+
+top_topic_terms <- lda_topics |>
+  group_by(topic) |>
+  slice_max(beta, n = 10, with_ties = FALSE) |>
+  arrange(topic, desc(beta)) |>
+  ungroup()
+
+top_topic_terms
+```
+
+The five-topic LDA model identified several recurring dimensions of vaccine-related discourse. Topic 1 concentrated on vaccination and dose administration, while Topic 3 reflected political leadership and government policy. Topic 4 emphasised disease risks and public health information, and Topic 5 captured broader pandemic-related concerns. Topic 2 contained more general conversational language, potentially reflecting personal experiences and vaccine access. These labels are provisional interpretations of the highest-probability terms rather than independently validated categories.
+
+Figure X presents the ten highest-probability terms within each of the five estimated topics. The beta parameter represents the probability of a term conditional on a topic. Higher values indicate stronger representation within that topic, although they do not establish that a term is unique to it.
+
+```{r da-topic-figure, fig.width=13, fig.height=11, dpi=150, out.width="100%"}
+# Visualise the ten highest-probability terms in each topic
+
+topic_terms_plot <- top_topic_terms |>
+  mutate(
+    topic = factor(
+      paste("Topic", topic),
+      levels = paste("Topic", 1:5)
+    )
+  ) |>
+  ggplot(aes(
+    x = tidytext::reorder_within(term, beta, topic),
+    y = beta
+  )) +
+  geom_col(fill = "steelblue", width = 0.65) +
+  coord_flip() +
+  facet_wrap(~ topic, scales = "free", ncol = 2) +
+  tidytext::scale_x_reordered() +
+  labs(
+    title = "Five topics in vaccine discourse",
+    subtitle = "Ten highest-probability terms within each LDA topic",
+    x = NULL,
+    y = "Term probability (beta)"
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    plot.title = element_text(face = "bold", size = 15),
+    strip.text = element_text(face = "bold", size = 11),
+    axis.text.y = element_text(size = 10),
+    axis.text.x = element_text(size = 10),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.spacing = grid::unit(1.5, "lines")
+  )
+
+topic_terms_plot
+
+ggsave(
+  here::here("outputs", "figures", "lda_topic_terms.png"),
+  plot = topic_terms_plot,
+  width = 13,
+  height = 11,
+  dpi = 300
+)
+```
+
+## Topic prevalence across sources and time
+
+The LDA model estimates a mixture of topics for each sampled document. We identify each document's dominant topic using its highest estimated topic probability (gamma), then compare topic distributions across sources and years.
+
+```{r}
+# Extract document-topic probabilities
+document_topics <- tidytext::tidy(
+  lda_model,
+  matrix = "gamma"
+)
+
+# Identify each document's dominant topic
+dominant_topics <- document_topics |>
+  group_by(document) |>
+  slice_max(gamma, n = 1, with_ties = FALSE) |>
+  ungroup() |>
+  mutate(document_id = as.character(document)) |>
+  left_join(
+    lda_sample |>
+      select(document_id, source, date),
+    by = "document_id"
+  )
+
+# Check the results
+dominant_topics |>
+  count(source, topic)
+```
+
+```{r}
+dominant_topics |>
+  summarise(
+    documents = n(),
+    missing_source = sum(is.na(source)),
+    missing_date = sum(is.na(date))
+  )
+```
+
+### Topic prevalence across sources
+
+We examine how the five LDA topics are distributed across news articles, Reddit comments and Twitter posts. Each document is assigned to its highest-probability topic. Percentages are calculated within each source to account for differences in sample size.
+
+These results describe the stratified modelling sample rather than the full corpus.
+
+```{r}
+# Calculate dominant-topic proportions within each source
+topic_prevalence <- dominant_topics |>
+  count(source, topic, name = "documents") |>
+  group_by(source) |>
+  mutate(
+    percentage = 100 * documents / sum(documents),
+    topic = factor(
+      paste("Topic", topic),
+      levels = paste("Topic", 1:5)
+    )
+  ) |>
+  ungroup()
+
+# Inspect the distribution
+topic_prevalence |>
+  select(source, topic, documents, percentage)
+
+# Visualise topic prevalence by source
+topic_prevalence_plot <- topic_prevalence |>
+  ggplot(aes(x = source, y = percentage, fill = topic)) +
+  geom_col(width = 0.65) +
+  scale_y_continuous(
+    labels = scales::label_percent(scale = 1)
+  ) +
+  labs(
+    title = "Dominant LDA topics across sources",
+    subtitle = "Percentage of sampled documents assigned to each topic",
+    x = NULL,
+    y = "Percentage of documents",
+    fill = "Topic"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    panel.grid.major.x = element_blank(),
+    legend.position = "bottom"
+  )
+
+topic_prevalence_plot
+
+# Save the figure
+ggsave(
+  here::here("outputs", "figures", "lda_topic_prevalence.png"),
+  plot = topic_prevalence_plot,
+  width = 10,
+  height = 6,
+  dpi = 300
+)
+```
+
+### Interpretation: Topic prevalence across sources
+
+The distribution of dominant LDA topics differs substantially across the three sources.
+
+**Reddit** is dominated by Topic 1 (57.16%), characterised by vaccination-related terms such as *vaccine, vaccinated, shot, dose* and *Pfizer*. Topic 2, associated with everyday experiences and practical concerns, accounts for another 21.22%.
+
+**Twitter** also shows a strong concentration in Topic 1 (46.63%), followed by Topic 2 (22.89%). This suggests that the sampled Twitter and Reddit documents share an emphasis on vaccination and related experiences, although the proportions differ.
+
+**News articles** exhibit a different distribution. Topic 3 (37.07%), characterised by political figures and government-related terms, is the most prevalent. Topics 4 (23.25%) and 5 (23.18%), associated with public-health risks and broader pandemic coverage, also account for substantial proportions.
+
+These findings suggest differences in the thematic emphasis of the sampled sources. However, the results should not be interpreted as representative of all activity on these platforms. Topic assignments are model-generated, and differences in sampling periods, document lengths and collection methods may influence the observed distributions.
+
+Note: News contributes all 1,346 available articles, while Reddit and Twitter contribute sampled documents.
+
+The percentages are calculated within each source, so the unequal sample sizes don't directly determine the bar heights.
+
+The differences are not purely platform driven. News articles are longer than tweets, and the Twitter dataset covers a shorter period than the other sources.
+
+### Temporal evolution of dominant topics
+
+```{r}
+# Calculate quarterly topic prevalence within each source
+quarterly_topics <- dominant_topics |>
+  mutate(
+    quarter = lubridate::floor_date(date, "quarter"),
+    topic = factor(
+      paste("Topic", topic),
+      levels = paste("Topic", 1:5)
+    )
+  ) |>
+  count(source, quarter, topic, name = "documents") |>
+  group_by(source, quarter) |>
+  mutate(
+    total_documents = sum(documents),
+    percentage = 100 * documents / total_documents
+  ) |>
+  ungroup()
+
+# Check quarterly sample sizes
+quarterly_topics |>
+  distinct(source, quarter, total_documents) |>
+  group_by(source) |>
+  summarise(
+    quarters = n(),
+    minimum_n = min(total_documents),
+    median_n = median(total_documents),
+    .groups = "drop"
+  )
+```
